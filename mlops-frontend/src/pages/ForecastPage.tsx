@@ -1,0 +1,291 @@
+import React, { useState } from 'react';
+import { PlatformId, NavigationTab } from '../types';
+import { mockPlatformSummaries, mockDailySalesHistory } from '../mock/mockData';
+import { MetricCard } from '../components/common/MetricCard';
+import { DemandLineChart } from '../components/common/DemandLineChart';
+import { StatusBadge } from '../components/common/StatusBadge';
+
+interface ForecastPageProps {
+  onNavigateTab: (tab: NavigationTab) => void;
+}
+
+export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => {
+  const [selectedChannel, setSelectedChannel] = useState<PlatformId>('all');
+  const [timeframe, setTimeframe] = useState<'14d' | '30d' | '60d'>('14d');
+  const [isInferencing, setIsInferencing] = useState(false);
+  const [inferenceSuccess, setInferenceSuccess] = useState(false);
+
+  const activeSummary = mockPlatformSummaries[selectedChannel];
+
+  const handleRunInference = () => {
+    setIsInferencing(true);
+    setTimeout(() => {
+      setIsInferencing(false);
+      setInferenceSuccess(true);
+      setTimeout(() => setInferenceSuccess(false), 3000);
+    }, 700);
+  };
+
+  return (
+    <div className="space-y-8">
+      {/* Page Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-stibee-hairline">
+        <div>
+          <h1 className="text-3xl font-semibold text-stibee-ink tracking-tight">
+            수요 예측 및 채널 모니터링
+          </h1>
+          <p className="text-sm text-stibee-muted mt-1 leading-relaxed">
+            동대문 20개 사입 품목의 3대 패션 플랫폼(브랜디, 지그재그, 에이블리) 일일 수요를 실시간 추론합니다.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRunInference}
+            disabled={isInferencing}
+            className="h-[42px] px-5 bg-stibee-coral hover:bg-stibee-coralHover text-white text-sm font-medium rounded-[4px] transition-colors disabled:opacity-50"
+          >
+            {isInferencing ? '추론 실행 중...' : '최신 예측 추론 실행'}
+          </button>
+        </div>
+      </div>
+
+      {inferenceSuccess && (
+        <div className="p-3 bg-stibee-surface border border-stibee-border rounded-[4px] text-xs text-stibee-ink flex items-center justify-between animate-in fade-in duration-150">
+          <span>FastAPI 서빙 인스턴스(8077/8099)로부터 최신 20일 시계열 추론 결과를 동기화했습니다.</span>
+          <span className="text-stibee-caption">지연시간: 38ms</span>
+        </div>
+      )}
+
+      {/* 4 Metric KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <MetricCard
+          label="내일 총 예상 주문량"
+          value={activeSummary.tomorrowPredicted}
+          unit="개"
+          deltaText="전주 대비 +34.2%"
+          description="채널별 가중치 합산 1일 판매량"
+        />
+        <MetricCard
+          label="최근 21일 롤링 WAPE"
+          value={`${activeSummary.wape21d}%`}
+          isAlert={activeSummary.hasDrift}
+          deltaText={activeSummary.hasDrift ? `이전 ${activeSummary.prevWape}% 대비 급증` : '정상 범위'}
+          description="예측 오차율 (목표 20.0% 이하)"
+        />
+        <MetricCard
+          label="공유 창고 보유 실재고"
+          value={activeSummary.currentStock}
+          unit="개"
+          description="동대문 20품목 총 보유 재고"
+        />
+        <MetricCard
+          label="데이터 드리프트 감지"
+          value={activeSummary.hasDrift ? '1개 채널' : '0건'}
+          isAlert={activeSummary.hasDrift}
+          deltaText={activeSummary.hasDrift ? '브랜디 빠른 배송 패턴 변화' : '전 채널 정상'}
+          description="주말 판매 급증으로 인한 영구적 변화"
+        />
+      </div>
+
+      {/* Main Analysis Section (2 Columns) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left 8 Cols: Interactive Chart Card */}
+        <div className="lg:col-span-8 bg-white border border-stibee-hairline rounded-[4px] p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+            <div>
+              <h2 className="text-base font-semibold text-stibee-ink">
+                일별 실제 판매량 vs 모델 예측 추이
+              </h2>
+              <p className="text-xs text-stibee-caption mt-0.5">
+                과거 20일 시계열 입력 기반 GRU 32-16 모델의 익일 판매량 예측 성능 검증
+              </p>
+            </div>
+
+            {/* Timeframe selector */}
+            <div className="flex items-center gap-1 bg-stibee-surface p-1 rounded-[4px] border border-stibee-hairline text-xs">
+              <button
+                type="button"
+                onClick={() => setTimeframe('14d')}
+                className={`px-2.5 py-1 rounded-[3px] transition-colors ${
+                  timeframe === '14d'
+                    ? 'bg-white text-stibee-ink font-medium border border-stibee-hairline'
+                    : 'text-stibee-caption hover:text-stibee-ink'
+                }`}
+              >
+                최근 14일
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimeframe('30d')}
+                className={`px-2.5 py-1 rounded-[3px] transition-colors ${
+                  timeframe === '30d'
+                    ? 'bg-white text-stibee-ink font-medium border border-stibee-hairline'
+                    : 'text-stibee-caption hover:text-stibee-ink'
+                }`}
+              >
+                최근 30일
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimeframe('60d')}
+                className={`px-2.5 py-1 rounded-[3px] transition-colors ${
+                  timeframe === '60d'
+                    ? 'bg-white text-stibee-ink font-medium border border-stibee-hairline'
+                    : 'text-stibee-caption hover:text-stibee-ink'
+                }`}
+              >
+                최근 60일
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Chart */}
+          <div className="py-2">
+            <DemandLineChart data={mockDailySalesHistory} height={300} />
+          </div>
+        </div>
+
+        {/* Right 4 Cols: Operational Channel Insights */}
+        <div className="lg:col-span-4 space-y-4">
+          {/* Drift Alert Card */}
+          <div className="bg-white border border-stibee-coral/40 rounded-[4px] p-5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-stibee-coral">
+                데이터 드리프트 발생 알림
+              </span>
+              <span className="text-[11px] text-stibee-caption">
+                2026.10.01 발생
+              </span>
+            </div>
+            <h3 className="text-sm font-semibold text-stibee-ink">
+              브랜디 빠른 배송 주말 급증 패턴
+            </h3>
+            <p className="text-xs text-stibee-muted mt-2 leading-relaxed">
+              2026년 10월 1일 브랜디 빠른 배송 개시 후 주말 주문이 1.8배로 영구 전환되었습니다. 기존 모델의 오차(WAPE 22.8%)가 임계값 20.0%를 초과하여 자동 재학습 파이프라인이 기동되었습니다.
+            </p>
+            <div className="mt-4 pt-3 border-t border-stibee-hairline flex items-center justify-between">
+              <span className="text-xs text-stibee-caption">
+                회복 WAPE: 6.8% (게이트 통과)
+              </span>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('aiops')}
+                className="text-xs text-stibee-coral hover:text-stibee-coralHover font-medium underline-offset-2 hover:underline"
+              >
+                AIOps 운영 보기
+              </button>
+            </div>
+          </div>
+
+          {/* Channel Filter Card */}
+          <div className="bg-white border border-stibee-hairline rounded-[4px] p-5 space-y-3">
+            <div className="text-xs font-semibold text-stibee-ink">
+              채널별 수요 및 배송 현황
+            </div>
+            <div className="space-y-2">
+              {(['all', 'brandi', 'zigzag', 'ably'] as const).map((pid) => {
+                const item = mockPlatformSummaries[pid];
+                const isSelected = selectedChannel === pid;
+                return (
+                  <button
+                    key={pid}
+                    type="button"
+                    onClick={() => setSelectedChannel(pid)}
+                    className={`w-full p-2.5 rounded-[4px] text-left text-xs transition-colors flex items-center justify-between border ${
+                      isSelected
+                        ? 'bg-stibee-surface border-stibee-border font-medium'
+                        : 'bg-white border-stibee-hairline hover:bg-stibee-surface'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-stibee-ink font-medium">{item.name}</div>
+                      <div className="text-[11px] text-stibee-caption mt-0.5">{item.deliveryService}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-stibee-ink">{item.tomorrowPredicted}개</div>
+                      <div className={`text-[11px] ${item.hasDrift ? 'text-stibee-coral' : 'text-stibee-muted'}`}>
+                        WAPE {item.wape21d}%
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Table: Detailed Channel Breakdown */}
+      <div className="bg-white border border-stibee-hairline rounded-[4px] p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-stibee-ink">
+              플랫폼별 예측 지표 및 모델 서빙 상세
+            </h2>
+            <p className="text-xs text-stibee-caption mt-0.5">
+              각 이커머스 입점 채널별 배송 조건과 GRU 추론 모델 품질 현황
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('inventory')}
+            className="text-xs text-stibee-coral hover:text-stibee-coralHover font-medium"
+          >
+            사입 재고 계획으로 이동
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-stibee-hairline text-stibee-caption">
+                <th className="py-3 px-3 font-normal">플랫폼 채널</th>
+                <th className="py-3 px-3 font-normal">배송 방식</th>
+                <th className="py-3 px-3 font-normal">내일 예상 주문</th>
+                <th className="py-3 px-3 font-normal">최근 21일 WAPE</th>
+                <th className="py-3 px-3 font-normal">직전 WAPE</th>
+                <th className="py-3 px-3 font-normal">서빙 모델 버전</th>
+                <th className="py-3 px-3 font-normal">상태</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stibee-hairline">
+              {(['brandi', 'zigzag', 'ably'] as const).map((pid) => {
+                const item = mockPlatformSummaries[pid];
+                return (
+                  <tr key={pid} className="hover:bg-stibee-surface transition-colors">
+                    <td className="py-3.5 px-3 font-medium text-stibee-ink">
+                      {item.name}
+                    </td>
+                    <td className="py-3.5 px-3 text-stibee-muted">
+                      {item.deliveryService}
+                    </td>
+                    <td className="py-3.5 px-3 font-semibold text-stibee-ink">
+                      {item.tomorrowPredicted}건
+                    </td>
+                    <td className={`py-3.5 px-3 font-medium ${item.hasDrift ? 'text-stibee-coral' : 'text-stibee-ink'}`}>
+                      {item.wape21d.toFixed(1)}%
+                    </td>
+                    <td className="py-3.5 px-3 text-stibee-caption">
+                      {item.prevWape.toFixed(1)}%
+                    </td>
+                    <td className="py-3.5 px-3 text-stibee-caption font-mono">
+                      {item.modelVersion}
+                    </td>
+                    <td className="py-3.5 px-3">
+                      <StatusBadge
+                        variant={item.hasDrift ? 'warning' : 'normal'}
+                        label={item.statusText}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};

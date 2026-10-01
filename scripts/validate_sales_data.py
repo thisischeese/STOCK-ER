@@ -80,12 +80,13 @@ def sequences(df: pd.DataFrame, scaler: Scaler, last_n_rows: int | None = None):
 
 
 def build_model(n_features: int) -> keras.Model:
-    """스켈레톤 구조(LSTM 32-32-16 + Dense 16 + Dense 1) 그대로, 입력 피처 수와 loss(MAE)만 바꿈."""
+    """GRU 32-16 + Dropout 0.1 구조 (이승민 최우수 모델 후보)."""
     model = keras.Sequential([
         keras.layers.Input(shape=(SEQ_LEN, n_features)),
-        keras.layers.LSTM(32, return_sequences=True),
-        keras.layers.LSTM(32, return_sequences=True),
-        keras.layers.LSTM(16),
+        keras.layers.GRU(32, return_sequences=True),
+        keras.layers.Dropout(0.1),
+        keras.layers.GRU(16),
+        keras.layers.Dropout(0.1),
         keras.layers.Dense(16, activation="relu"),
         keras.layers.Dense(1),
     ])
