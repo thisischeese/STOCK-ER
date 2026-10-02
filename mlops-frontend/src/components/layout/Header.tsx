@@ -11,6 +11,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentTab,
   onTabChange,
+  servingHealthy,
 }) => {
   const tabs: { id: NavigationTab; label: string }[] = [
     { id: 'forecast', label: '수요 예측' },
@@ -64,9 +65,25 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Right: Current Dynamic Date */}
-        <div className="flex items-center text-xs text-stibee-caption font-normal">
-          <span>{currentDateText}</span>
+        {/* Right: Realtime Backend Status & Dynamic Date */}
+        <div className="flex items-center gap-3 text-xs">
+          {servingHealthy !== undefined && (
+            <div
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                servingHealthy
+                  ? 'bg-[#eefbf0] text-[#1b7e32] border border-[#a3e635]/40'
+                  : 'bg-[#fff5f5] text-[#dc2626] border border-[#fca5a5]'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  servingHealthy ? 'bg-[#22c55e] animate-pulse' : 'bg-[#ef4444]'
+                }`}
+              />
+              <span>{servingHealthy ? 'FastAPI 8077 연결됨' : 'FastAPI 8077 오프라인'}</span>
+            </div>
+          )}
+          <span className="text-stibee-caption font-normal hidden sm:inline">{currentDateText}</span>
         </div>
       </div>
     </header>
