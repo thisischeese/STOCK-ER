@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PlatformId, NavigationTab, DailySalesDataPoint } from '../types';
 import {
   mockPlatformSummaries,
@@ -33,6 +33,12 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
   const [liveChartData, setLiveChartData] = useState<DailySalesDataPoint[] | null>(null);
   const [liveWape, setLiveWape] = useState<string | null>(null);
   const [liveHasDrift, setLiveHasDrift] = useState<boolean | null>(null);
+  const [livePlatformMetrics, setLivePlatformMetrics] = useState<Record<string, {
+    wape: string;
+    drift: boolean;
+    rmse?: number;
+  }> | null>(null);
+  const [liveModelVersion, setLiveModelVersion] = useState<string | null>(null);
   const [isLiveFromBackend, setIsLiveFromBackend] = useState<boolean>(false);
 
   const activeSummary = mockPlatformSummaries[selectedChannel];
@@ -88,6 +94,21 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
           setLiveWape(formatWape(platMetric.wape));
           setLiveHasDrift(platMetric.drift);
         }
+
+        if (batchRes.data.drift_check.platforms) {
+          const metrics: Record<string, { wape: string; drift: boolean; rmse?: number }> = {};
+          Object.entries(batchRes.data.drift_check.platforms).forEach(([pKey, pVal]) => {
+            metrics[pKey] = {
+              wape: formatWape(pVal.wape),
+              drift: Boolean(pVal.drift),
+              rmse: pVal.rmse,
+            };
+          });
+          setLivePlatformMetrics(metrics);
+        }
+        if (batchRes.data.model_version) {
+          setLiveModelVersion(batchRes.data.model_version);
+        }
       }
 
       setInferenceFeedback({
@@ -102,6 +123,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       setLiveChartData(null);
       setLiveWape(null);
       setLiveHasDrift(null);
+      setLivePlatformMetrics(null);
       setInferenceFeedback({
         message: '백엔드 서빙 인스턴스(8077) 연결 실패: 서버가 오프라인이거나 응답하지 않아 로컬 기준 데이터를 표시합니다.',
         latencyText: '연결 실패',
@@ -112,6 +134,11 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
 
     setIsInferencing(false);
   };
+
+  useEffect(() => {
+    // 화면 마운트 및 채널 변경 시 백엔드 API를 기본 우선 호출하여 실시간 Keras 추론 데이터 반영
+    handleRunInference();
+  }, [selectedChannel]);
 
   return (
     <div className="space-y-8">
@@ -157,7 +184,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           label="내일 총 예상 주문량"
-          value={livePredictedQty !== null && selectedChannel !== 'all' ? livePredictedQty : activeSummary.tomorrowPredicted}
+          value={livePredictedQty !== null ? livePredictedQty : activeSummary.tomorrowPredicted}
           unit="개"
           deltaText={livePredictedQty !== null ? "FastAPI 실시간 추론치 반영" : "전주 대비 +34.2%"}
           description="채널별 가중치 합산 1일 판매량"
@@ -304,6 +331,9 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
               {(['all', 'brandi', 'zigzag', 'ably'] as const).map((pid) => {
                 const item = mockPlatformSummaries[pid];
                 const isSelected = selectedChannel === pid;
+                const platMetric = pid !== 'all' ? livePlatformMetrics?.[pid] : undefined;
+                const displayWape = platMetric ? platMetric.wape : `${item.wape21d}%`;
+                const hasDrift = platMetric ? platMetric.drift : item.hasDrift;
                 return (
                   <button
                     key={pid}
@@ -321,8 +351,8 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
                     </div>
                     <div className="text-right">
                       <div className="font-semibold text-stibee-ink">{item.tomorrowPredicted}개</div>
-                      <div className={`text-[11px] ${item.hasDrift ? 'text-stibee-coral' : 'text-stibee-muted'}`}>
-                        WAPE {item.wape21d}%
+                      <div className={`text-[11px] ${hasDrift ? 'text-stibee-coral' : 'text-stibee-muted'}`}>
+                        WAPE {displayWape}
                       </div>
                     </div>
                   </button>
@@ -369,6 +399,10 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
             <tbody className="divide-y divide-stibee-hairline">
               {(['brandi', 'zigzag', 'ably'] as const).map((pid) => {
                 const item = mockPlatformSummaries[pid];
+                const platMetric = livePlatformMetrics?.[pid];
+                const displayWape = platMetric ? platMetric.wape : `${item.wape21d.toFixed(1)}%`;
+                const hasDrift = platMetric ? platMetric.drift : item.hasDrift;
+                const modelVersion = liveModelVersion || item.modelVersion;
                 return (
                   <tr key={pid} className="hover:bg-stibee-surface transition-colors">
                     <td className="py-3.5 px-3 font-medium text-stibee-ink">
@@ -380,19 +414,19 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
                     <td className="py-3.5 px-3 font-semibold text-stibee-ink">
                       {item.tomorrowPredicted}건
                     </td>
-                    <td className={`py-3.5 px-3 font-medium ${item.hasDrift ? 'text-stibee-coral' : 'text-stibee-ink'}`}>
-                      {item.wape21d.toFixed(1)}%
+                    <td className={`py-3.5 px-3 font-medium ${hasDrift ? 'text-stibee-coral' : 'text-stibee-ink'}`}>
+                      {displayWape}
                     </td>
                     <td className="py-3.5 px-3 text-stibee-caption">
                       {item.prevWape.toFixed(1)}%
                     </td>
                     <td className="py-3.5 px-3 text-stibee-caption font-mono">
-                      {item.modelVersion}
+                      {modelVersion}
                     </td>
                     <td className="py-3.5 px-3">
                       <StatusBadge
-                        variant={item.hasDrift ? 'warning' : 'normal'}
-                        label={item.statusText}
+                        variant={hasDrift ? 'warning' : 'normal'}
+                        label={hasDrift ? '드리프트 감지' : '정상 운영 중'}
                       />
                     </td>
                   </tr>

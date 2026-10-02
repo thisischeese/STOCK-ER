@@ -44,24 +44,7 @@ export const ServingPage: React.FC = () => {
     status: number;
     latencyMs: number;
     data: any;
-  } | null>(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('infer') === '1') {
-      return {
-        status: 200,
-        latencyMs: 34,
-        data: {
-          prediction_quantity: 58,
-          channel: "brandi",
-          is_weekend: false,
-          model_version: "Production-v2",
-          stage: "Production",
-          status: "SUCCESS"
-        }
-      };
-    }
-    return null;
-  });
+  } | null>(null);
 
   const fetchDataStatus = async () => {
     const res = await getDataStatus(8077);
@@ -99,16 +82,6 @@ export const ServingPage: React.FC = () => {
       fileInputRef.current.value = '';
     }
   };
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('scroll') === 'bottom') {
-      window.scrollTo({ top: 520, behavior: 'instant' });
-    }
-    // 마운트 시 초기 헬스체크 및 데이터 상태 조회 실행
-    handleHealthCheck();
-    fetchDataStatus();
-  }, []);
 
   const handleHealthCheck = async () => {
     setIsHealthChecking(true);
@@ -231,6 +204,17 @@ export const ServingPage: React.FC = () => {
     }
     setIsInferencing(false);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('scroll') === 'bottom') {
+      window.scrollTo({ top: 520, behavior: 'instant' });
+    }
+    // 마운트 시 초기 헬스체크, 데이터 상태 조회 및 실시간 단건 예측 추론 실행
+    handleHealthCheck();
+    fetchDataStatus();
+    handleRunPlaygroundInference();
+  }, []);
 
   return (
     <div className="space-y-8">
