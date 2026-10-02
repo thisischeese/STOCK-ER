@@ -15,8 +15,24 @@ export const AIOpsPage: React.FC = () => {
   const [logFilter, setLogFilter] = useState<'ALL' | 'INFO' | 'WARN' | 'PROMOTE'>('ALL');
   const [activeStepFilter, setActiveStepFilter] = useState<string | null>(null);
   const [copiedLog, setCopiedLog] = useState(false);
-  const [rollbackToast, setRollbackToast] = useState<string | null>(null);
+  const [rollbackToast, setRollbackToast] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('rollback') === '1') {
+      return 'MLflow 레지스트리: Version 1 (GRU 32-16) 버전 롤백 시뮬레이션이 성공하였습니다. 캐시 핫리로드 지연시간 0.04초, 무중단 서빙 확인.';
+    }
+    return null;
+  });
   const [isRollingBack, setIsRollingBack] = useState(false);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('scroll') === 'registry') {
+      const el = document.getElementById('model-registry-section');
+      if (el) el.scrollIntoView({ behavior: 'instant' });
+    } else if (params.get('scroll') === 'bottom') {
+      window.scrollTo({ top: 580, behavior: 'instant' });
+    }
+  }, []);
 
   const handleRefreshPipeline = () => {
     setIsRefreshingPipeline(true);
@@ -237,7 +253,7 @@ export const AIOpsPage: React.FC = () => {
       </div>
 
       {/* Model Registry Version History Table */}
-      <div className="bg-white border border-stibee-hairline rounded-[4px] p-6 space-y-4">
+      <div id="model-registry-section" className="bg-white border border-stibee-hairline rounded-[4px] p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-stibee-ink">
             MLflow 모델 레지스트리 버전 이력
@@ -246,6 +262,16 @@ export const AIOpsPage: React.FC = () => {
             GRU 시계열 예측 모델의 스테이지 관리 및 검증 성능 지표
           </p>
         </div>
+
+        {rollbackToast && (
+          <div className="p-3 bg-[#fff8f8] border border-stibee-coral/40 rounded-[4px] text-xs text-stibee-ink flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <span className="font-semibold text-stibee-coral">[롤백 시뮬레이션 성공]</span>
+              <span>{rollbackToast}</span>
+            </span>
+            <span className="text-stibee-coral font-medium shrink-0 ml-2">무중단 서빙 확인</span>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">

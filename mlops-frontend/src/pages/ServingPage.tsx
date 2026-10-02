@@ -27,7 +27,31 @@ export const ServingPage: React.FC = () => {
     status: number;
     latencyMs: number;
     data: any;
-  } | null>(null);
+  } | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('infer') === '1') {
+      return {
+        status: 200,
+        latencyMs: 34,
+        data: {
+          prediction_quantity: 58,
+          channel: "brandi",
+          is_weekend: false,
+          model_version: "Production-v2",
+          stage: "Production",
+          status: "SUCCESS"
+        }
+      };
+    }
+    return null;
+  });
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('scroll') === 'bottom') {
+      window.scrollTo({ top: 520, behavior: 'instant' });
+    }
+  }, []);
 
   const handleHealthCheck = () => {
     setIsHealthChecking(true);

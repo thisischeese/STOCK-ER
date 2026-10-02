@@ -33,7 +33,13 @@ export const InventoryPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedChannelFilter, setSelectedChannelFilter] = useState<string>('all');
   const [onlyUrgent, setOnlyUrgent] = useState(false);
-  const [activeProductForModal, setActiveProductForModal] = useState<FashionProductItem | null>(null);
+  const [activeProductForModal, setActiveProductForModal] = useState<FashionProductItem | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('modal') === '1') {
+      return mockFashionProducts[0];
+    }
+    return null;
+  });
   const [downloadSuccessToast, setDownloadSuccessToast] = useState(false);
   const [orderConfirmedToast, setOrderConfirmedToast] = useState<string | null>(null);
 
