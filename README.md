@@ -27,7 +27,6 @@ HAIC 모델 서빙 3일 실습 스켈레톤(Day1 서빙 → Day2 MLOps → Day3 
 6. [AIOps 루프 : 드리프트 감지와 재학습](#6-aiops-루프--드리프트-감지와-재학습)
 7. [대시보드 (React 프론트엔드)](#7-대시보드-react-프론트엔드)
 8. [모델 구조 실험하기](#8-모델-구조-실험하기)
-9. [알려진 이슈](#9-알려진-이슈)
 
 ---
 
@@ -56,6 +55,7 @@ uvicorn serving_app.main:app --host 0.0.0.0 --port 8077
 curl -F "file=@data/synthetic/sales_base.csv" http://localhost:8077/data/upload
 
 # 5) MLflow 학습·등록 (Day2) - 게이트 통과 시 Sales_Predictor 를 Production 으로 승격
+#    (첫 등록은 플랫폼별 WAPE ≤ 20%만, 이후에는 기존 Production보다 나쁘지 않아야 승격)
 python serving_app/train_and_register.py
 
 # 6) MLflow Production 모델로 서빙
@@ -95,7 +95,7 @@ project/
 ├── serving_app/
 │   ├── main.py                   # FastAPI 앱, 라우터 등록, aiops 로거 설정
 │   ├── schemas.py                # 요청·응답 스키마 (판매량 CSV와 같은 8개 필드)
-│   ├── lstm_model.py             # 서빙 모델 구조 (LSTM 32-32-16, MSE)
+│   ├── lstm_model.py             # 서빙 모델 구조 (GRU 32 → Dropout 0.2 → GRU 16, MAE)
 │   ├── model_loader.py           # local / mlflow 로딩, Lazy·Eager, 캐시 무효화
 │   ├── train_and_register.py     # train_and_register() 스크래치 학습 / fine_tune() warm start
 │   ├── routers/                  # predict, health, data, logs
@@ -103,7 +103,7 @@ project/
 │   │   ├── drift_detector.py     # 플랫폼별 WAPE·RMSE, 드리프트 판정
 │   │   └── retrain_trigger.py    # 드리프트 시 fine-tuning → 게이트 → 재배포
 │   ├── models/                   # 학습 산출물 (git 제외)
-│   ├── static/index.html         # 스켈레톤 기본 대시보드 (8077 루트, 9번 참고)
+│   ├── static/index.html         # 확인용 대시보드 (8077 루트) : 업로드·시나리오 배치·로그
 │   └── Dockerfile, docker-compose.yml
 ├── scripts/
 │   ├── generate_sales_data.py    # 업무 규칙 기반 합성 데이터 생성
@@ -111,7 +111,7 @@ project/
 │   ├── validate_sales_data.py    # 모델 구조 검증 (과적합·드리프트 판정·재학습 효과)
 │   ├── run_experiments.py        # 모델 변형별 비교 실험 → JSON 한 줄 출력
 │   ├── experiment_models.py      # 모델 구조 비교 실험 (초기 버전)
-│   └── simulate_drift.py         # 드리프트 주입 클라이언트 (9번 참고)
+│   └── simulate_drift.py         # 시나리오 CSV를 /predict/batch-test로 보내는 드리프트 주입 클라이언트
 ├── mlops-frontend/               # React + Vite 운영 대시보드 (포트 3000)
 ├── docs/
 │   ├── model-upgrade-gru-dropout.md   # GRU + Dropout 변경 근거
@@ -168,15 +168,20 @@ project/
 `SalesScaler`는 baseline 학습 구간에서 **한 번만 fit**하고(`sales_scaler.pkl`), 이후 학습·재학습·서빙에서
 그대로 재사용합니다. 다시 fit하면 이미 그 기준으로 학습된 가중치와 어긋나기 때문입니다.
 
-### 서빙 모델과 실험 모델
+### 모델 구조
 
-| 구분 | 구조 | loss | 위치 |
-|---|---|---|---|
-| 서빙 (현재) | `LSTM(32) → LSTM(32) → LSTM(16) → Dense(16) → Dense(1)` | MSE | `serving_app/lstm_model.py` |
-| 실험 기준 모델 (이슈 #1) | `GRU(32) → Dropout(0.2) → GRU(16) → Dense(16) → Dense(1)` | MAE | `scripts/validate_sales_data.py` |
+```
+Input(20, 11) → GRU(32) → Dropout(0.2) → GRU(16) → Dense(16, relu) → Dense(1)     loss MAE · 파라미터 7,009개
+```
 
-실험에서는 GRU + Dropout 구조를 기준 모델로 채택했습니다(근거 : [docs/model-upgrade-gru-dropout.md](docs/model-upgrade-gru-dropout.md)).
-서빙 모델에 반영하는 작업은 아직 별도로 남아 있습니다.
+모델 구조 실험(이슈 #1)에서 채택한 기준 모델을 서빙에도 그대로 씁니다(근거 : [docs/model-upgrade-gru-dropout.md](docs/model-upgrade-gru-dropout.md)).
+
+| 위치 | 용도 |
+|---|---|
+| `serving_app/lstm_model.py` | 서빙 모델 - baseline 학습, MLflow 학습, warm start 재학습이 공유 (파일 이름은 import 경로 때문에 유지) |
+| `scripts/validate_sales_data.py` | 실험용 복사본 - 구조를 바꿔 비교할 때 이 파일의 `build_model()`만 고칩니다 |
+
+loss는 평가 지표 WAPE(절대 오차 기반)와 맞춰 MAE를 씁니다. Dropout은 학습 때만 켜지고 추론 때는 꺼집니다.
 
 ---
 
@@ -217,6 +222,8 @@ print(json.dumps(r.json()["drift_check"], indent=2, ensure_ascii=False))
 EOF
 ```
 
+정상 → 드리프트 시나리오를 한 번에 보내려면 `scripts/simulate_drift.py`를 씁니다 ([6번](#6-aiops-루프--드리프트-감지와-재학습) 참고).
+
 ---
 
 ## 6. AIOps 루프 : 드리프트 감지와 재학습
@@ -238,12 +245,29 @@ EOF
 - RMSE는 보조 지표로 함께 기록합니다.
 - 로그는 `logs/aiops.log`에 쌓이고 `/logs`로 확인할 수 있습니다.
 
+### 시뮬레이션 실행
+
+재학습은 **가장 최근 업로드 파일**의 플랫폼별 최근 41행을 쓰므로, 드리프트 시나리오 CSV를 먼저 올린 뒤 배치를 보냅니다.
+
+```bash
+# 서버 : MODEL_SOURCE=mlflow uvicorn serving_app.main:app --port 8077  (1번 빠른 시작 5단계까지 끝난 상태)
+python scripts/simulate_drift.py --upload                  # sales_drift_brandi.csv 업로드 → 정상 배치 → 드리프트 배치
+python scripts/simulate_drift.py --target both             # 로컬(8077)과 컨테이너(8099)에 같은 배치 전송
+python scripts/simulate_drift.py --drift sales_drift_viral.csv   # 보조 시나리오
+```
+
+브라우저에서는 `http://localhost:8077/`(확인용 대시보드)에서 같은 시나리오 CSV를 골라 보낼 수 있습니다.
+
 ### 완료 기준
 
 - [ ] `/data/upload`로 CSV를 올리면 `/data/status`에 반영되는가
 - [ ] 정상 배치는 모든 플랫폼 WAPE 20% 이하, 브랜디 드리프트 배치는 **브랜디만** 20% 초과인가
-- [ ] `logs/aiops.log`에 `[WARN] drift detected` → `[INFO] retrain triggered` → `[OK] new_wape=...` 순서로 기록되는가
-- [ ] 재배포 후 `/predict` 응답의 `model_version`이 새 Production 버전인가
+- [ ] `logs/aiops.log`에 `[WARN] drift detected` → `[INFO] retrain triggered` → `[OK] new_wape=...` 또는 `[GATE FAILED]` 순서로 기록되는가
+- [ ] 승격됐다면 `/predict` 응답의 `model_version`이 새 Production 버전이고, 게이트에서 탈락했다면 기존 버전이 그대로인가
+
+게이트는 **플랫폼마다** "WAPE ≤ 20%"와 "기존 모델보다 나쁘지 않음"을 모두 요구합니다. 그래서 드리프트가 난 플랫폼은 크게 좋아져도
+다른 플랫폼이 시험 구간(5일)에서 조금이라도 나빠지면 승격되지 않고 기존 모델이 유지됩니다(의도한 정책).
+합성 데이터 브랜디 시나리오에서는 브랜디가 16.3% → 7.7%로 좋아졌지만 지그재그·에이블리가 소폭 나빠져 `[GATE FAILED]`가 납니다.
 
 ---
 

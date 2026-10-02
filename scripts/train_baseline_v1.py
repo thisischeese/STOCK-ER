@@ -1,6 +1,6 @@
 """판매량 baseline 학습. 공통 날짜 기준 앞 80%에만 scaler를 fit한다.
 
-기존 운영 LSTM과 학습 설정은 유지하고 입력과 타깃을 판매량 계약으로 연결한다.
+모델 구조(serving_app/lstm_model.py, GRU 2층 + Dropout · MAE)로 판매량 baseline을 학습한다.
 sales_scaler.pkl은 이후 학습과 서빙에서 다시 fit하지 않고 재사용한다.
 실행: python scripts/train_baseline_v1.py (실제 학습과 새 판매량 파일 저장)
 """
