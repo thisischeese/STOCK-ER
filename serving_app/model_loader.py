@@ -59,8 +59,14 @@ class LoadedModel:
         x = feature_matrix(frame, self.scaler)[None, ...]
         if x.shape != (1, SEQ_LEN, N_FEATURES):
             raise ValueError(f"예측 입력은 ({SEQ_LEN}, {N_FEATURES})이어야 합니다.")
-        pred_scaled = float(self._keras_model.predict(x, verbose=0)[0][0])
-        return float(self.scaler.inverse_sales(pred_scaled))
+        return float(self.predict_batch(x)[0])
+
+    def predict_batch(self, sequences):
+        """build_sequences의 (배치, 20, 11) 입력을 판매 수량으로 복원한다."""
+        if sequences.ndim != 3 or sequences.shape[1:] != (SEQ_LEN, N_FEATURES):
+            raise ValueError(f"배치 입력은 (배치, {SEQ_LEN}, {N_FEATURES})이어야 합니다.")
+        scaled = self._keras_model.predict(sequences, verbose=0).flatten()
+        return self.scaler.inverse_sales(scaled)
 
 
 def _load_from_local() -> LoadedModel:
