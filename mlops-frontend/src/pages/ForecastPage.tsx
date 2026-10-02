@@ -23,6 +23,7 @@ interface ForecastPageProps {
 export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => {
   const [selectedChannel, setSelectedChannel] = useState<PlatformId>('all');
   const [timeframe, setTimeframe] = useState<'14d' | '30d' | '60d'>('14d');
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isInferencing, setIsInferencing] = useState(false);
   const [inferenceSuccess, setInferenceSuccess] = useState(false);
   const [inferenceFeedback, setInferenceFeedback] = useState<{
@@ -151,6 +152,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       setTimeout(() => setInferenceFeedback(null), 5000);
     } finally {
       setIsInferencing(false);
+      setIsInitialLoading(false);
       isInferenceRunningRef.current = false;
     }
   };
@@ -200,10 +202,57 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
         </div>
       )}
 
-      {/* 4 Metric KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard
-          label="내일 총 예상 주문량"
+      {isInitialLoading ? (
+        <div className="space-y-6">
+          {/* Initial Loading Guide Banner */}
+          <div className="p-4 bg-stibee-surface border border-stibee-border rounded-[4px] flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-4 h-4 border-2 border-stibee-coral/30 border-t-stibee-coral rounded-full animate-spin" />
+              <div>
+                <span className="text-xs font-semibold text-stibee-ink">
+                  FastAPI 서빙 모델 실시간 추론 데이터를 불러오는 중입니다
+                </span>
+                <p className="text-[11px] text-stibee-muted mt-0.5">
+                  로컬 서빙 인스턴스(포트 8077)로부터 최근 20일 시계열 판매량 예측값과 실시간 WAPE를 수신하고 있습니다.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-mono text-stibee-coral bg-white px-2 py-0.5 rounded border border-stibee-hairline">
+              POST /predict & batch-test
+            </span>
+          </div>
+
+          {/* 4 Metric KPI Skeleton Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-28 bg-white border border-stibee-hairline rounded-[4px] p-5 space-y-3 animate-pulse">
+                <div className="h-3 w-28 bg-stibee-surface rounded" />
+                <div className="h-6 w-20 bg-stibee-surface rounded" />
+                <div className="h-3 w-36 bg-stibee-surface rounded" />
+              </div>
+            ))}
+          </div>
+
+          {/* Chart & Sidebar Skeleton */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-8 bg-white border border-stibee-hairline rounded-[4px] p-6 h-[380px] flex flex-col justify-center items-center text-center space-y-3">
+              <div className="w-7 h-7 border-2 border-stibee-coral/30 border-t-stibee-coral rounded-full animate-spin" />
+              <span className="text-xs font-medium text-stibee-muted">
+                Keras 시계열 예측 추론 곡선을 렌더링하는 중입니다...
+              </span>
+            </div>
+            <div className="lg:col-span-4 space-y-4">
+              <div className="h-32 bg-white border border-stibee-hairline rounded-[4px] p-5 animate-pulse" />
+              <div className="h-56 bg-white border border-stibee-hairline rounded-[4px] p-5 animate-pulse" />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* 4 Metric KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <MetricCard
+              label="내일 총 예상 주문량"
           value={livePredictedQty !== null ? livePredictedQty : activeSummary.tomorrowPredicted}
           unit="개"
           deltaText={livePredictedQty !== null ? "FastAPI 실시간 추론치 반영" : "전주 대비 +34.2%"}
@@ -456,6 +505,8 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
           </table>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };
