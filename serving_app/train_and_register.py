@@ -1,7 +1,7 @@
 """판매량 20일 x 11피처 학습 및 warm start 연결.
 
 baseline의 sales_scaler.pkl을 고정 재사용하고 날짜 기준으로 학습과 검증을 나눈다.
-운영 LSTM, MSE와 기존 학습 설정은 유지한다. RMSE는 판매 수량의 진단 지표다.
+모델 구조와 loss(GRU 2층 + Dropout, MAE)는 serving_app/lstm_model.py를 따른다. RMSE는 판매 수량의 진단 지표다.
 같은 검증 구간에서 플랫폼별 WAPE가 20% 이하고 기존 모델보다 나쁘지 않을 때 승격한다.
 """
 import os
@@ -13,6 +13,7 @@ import mlflow
 import mlflow.tensorflow
 import numpy as np
 import pandas as pd
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 from tensorflow import keras
 
@@ -21,7 +22,7 @@ from data.features import (
 )
 from data.storage import latest_upload, load_sales_data
 from serving_app.lstm_model import build_model
-from serving_app.model_loader import LOCAL_MODEL_PATH, MLFLOW_MODEL_URI, SCALER_PATH, get_model, validate_sales_model
+from serving_app.model_loader import LOCAL_MODEL_PATH, MLFLOW_MODEL_URI, SCALER_PATH, validate_sales_model
 from serving_app.monitoring.drift_detector import WINDOW_SIZE, WAPE_THRESHOLD, wape
 
 # 기존 운영 학습과 같은 시드 및 학습 설정을 유지한다.
@@ -54,32 +55,50 @@ def _prepare(rows, scaler: SalesScaler, last_n_rows: int | None = None):
 
 
 def _scores(y, predicted, old_predicted, platforms) -> dict:
+    """old_predicted가 None이면(비교할 Production이 없는 첫 등록) old_wape도 None이다."""
+    def old(mask):
+        return None if old_predicted is None else wape(y[mask], old_predicted[mask])
+
     by_platform = {}
     for platform in np.unique(platforms):
         mask = platforms == platform
         by_platform[str(platform)] = {
             "wape": wape(y[mask], predicted[mask]),
-            "old_wape": wape(y[mask], old_predicted[mask]),
+            "old_wape": old(mask),
             "rmse": rmse(y[mask], predicted[mask]),
         }
     return {
-        "wape": wape(y, predicted), "old_wape": wape(y, old_predicted),
+        "wape": wape(y, predicted), "old_wape": old(slice(None)),
         "rmse": rmse(y, predicted), "platforms": by_platform,
     }
 
 
 def _log_scores(scores):
     for name in ("wape", "old_wape", "rmse"):
-        mlflow.log_metric(name, scores[name])
+        if scores[name] is not None:
+            mlflow.log_metric(name, scores[name])
     for platform, metrics in scores["platforms"].items():
         for name, value in metrics.items():
-            mlflow.log_metric(f"{platform}_{name}", value)
+            if value is not None:
+                mlflow.log_metric(f"{platform}_{name}", value)
+
+
+def _production_reference():
+    """레지스트리의 현재 Production 모델. 아직 한 번도 등록되지 않았으면 None을 돌려준다."""
+    try:
+        if not MlflowClient().get_latest_versions(MODEL_NAME, stages=["Production"]):
+            return None
+    except MlflowException:  # 등록된 모델 이름 자체가 없음 (첫 등록)
+        return None
+    return mlflow.tensorflow.load_model(f"models:/{MODEL_NAME}/Production")
 
 
 def _register_if_gate_passed(model, run_id: str, scores: dict) -> dict:
+    """플랫폼마다 WAPE ≤ 20%, 그리고 비교할 Production이 있으면 그 모델보다 나쁘지 않을 때 승격한다."""
     result = {"run_id": run_id, **scores, "promoted": False}
     passed = bool(scores["platforms"]) and all(
-        metrics["wape"] <= WAPE_THRESHOLD and metrics["wape"] <= metrics["old_wape"]
+        metrics["wape"] <= WAPE_THRESHOLD
+        and (metrics["old_wape"] is None or metrics["wape"] <= metrics["old_wape"])
         for metrics in scores["platforms"].values()
     )
     if passed:
@@ -98,14 +117,17 @@ def train_and_register(csv_path: str | None = None, rows: list[dict] | None = No
     """Day2: 처음부터(scratch) 학습. 데이터가 충분한 base 학습에서만 사용합니다.
 
     csv_path나 rows를 지정하지 않으면 최신 CSV를 사용한다.
-    현재 서빙 모델과 같은 검증 구간을 비교한다.
+    레지스트리에 Production이 있으면 같은 검증 구간에서 그 모델과 비교하고,
+    첫 등록이면 절대 기준(플랫폼별 WAPE ≤ 20%)만 본다. 로컬 baseline(sales_v1.keras)과
+    비교하면 비슷한 두 모델 중 어느 쪽이 플랫폼마다 조금씩 이기느냐에 따라 첫 등록이 실패해,
+    MODEL_SOURCE=mlflow 서빙과 Docker 이미지가 Production 없이 뜨게 된다.
     """
     if rows is None:
         rows = load_sales_data(csv_path or latest_upload())
     scaler = SalesScaler.load(SCALER_PATH)
     X_train, y_train_scaled, X_test, y_test, platforms = _prepare(rows, scaler)
-    reference = get_model()
-    old_preds = reference.predict_batch(X_test)
+    reference = _production_reference()
+    old_preds = None if reference is None else scaler.inverse_sales(reference.predict(X_test, verbose=0).flatten())
 
     with mlflow.start_run(run_name="base-train"):
         model = build_model()
@@ -142,7 +164,7 @@ def fine_tune(rows: list[dict]) -> dict:
     model = keras.models.clone_model(reference)
     model.set_weights(reference.get_weights())
     validate_sales_model(model)
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=FINE_TUNE_LR), loss="mse")
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=FINE_TUNE_LR), loss="mae")  # base 학습과 같은 loss
 
     with mlflow.start_run(run_name="fine-tune"):
         model.fit(X_train, y_train_scaled, epochs=FINE_TUNE_EPOCHS, verbose=0)
