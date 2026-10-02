@@ -1,8 +1,16 @@
-import React, { useState } from 'react';
-import { RefreshCw, Check, Play, RotateCcw, Terminal } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { RefreshCw, Check, Play, RotateCcw, Terminal, UploadCloud, FileText } from 'lucide-react';
 import { mockServingInstances } from '../mock/mockData';
 import { MetricCard } from '../components/common/MetricCard';
 import { StatusBadge } from '../components/common/StatusBadge';
+import {
+  checkHealth,
+  predictSales,
+  generatePredictSequence,
+  getDataStatus,
+  uploadSalesCsv,
+  DataStatusResponse,
+} from '../services/api';
 
 export const ServingPage: React.FC = () => {
   // Hyperparameter Settings State
@@ -16,6 +24,15 @@ export const ServingPage: React.FC = () => {
   const [instances, setInstances] = useState(mockServingInstances);
   const [lastPingTime, setLastPingTime] = useState('방금 전');
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Data Upload and Status State
+  const [dataStatus, setDataStatus] = useState<DataStatusResponse | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadToast, setUploadToast] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // API Playground State
   const [testChannel, setTestChannel] = useState<'brandi' | 'zigzag' | 'ably'>('brandi');
@@ -46,27 +63,91 @@ export const ServingPage: React.FC = () => {
     return null;
   });
 
-  React.useEffect(() => {
+  const fetchDataStatus = async () => {
+    const res = await getDataStatus(8077);
+    if (res.ok && res.data) {
+      setDataStatus(res.data);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setUploadToast(null);
+
+    const res = await uploadSalesCsv(file, 8077);
+    if (res.ok && res.data) {
+      const platformSummary = Object.entries(res.data.platforms)
+        .map(([p, count]) => `${p}: ${count}행`)
+        .join(', ');
+      setUploadToast({
+        type: 'success',
+        message: `CSV 업로드 완료: ${res.data.filename} (총 ${res.data.rows}행, ${platformSummary})`,
+      });
+      await fetchDataStatus();
+    } else {
+      setUploadToast({
+        type: 'error',
+        message: `CSV 업로드 실패 (HTTP ${res.status}): ${res.error}`,
+      });
+    }
+
+    setIsUploading(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('scroll') === 'bottom') {
       window.scrollTo({ top: 520, behavior: 'instant' });
     }
+    // 마운트 시 초기 헬스체크 및 데이터 상태 조회 실행
+    handleHealthCheck();
+    fetchDataStatus();
   }, []);
 
-  const handleHealthCheck = () => {
+  const handleHealthCheck = async () => {
     setIsHealthChecking(true);
-    setTimeout(() => {
-      // Simulate slight realistic network jitter
-      setInstances((prev) =>
-        prev.map((inst) => ({
-          ...inst,
-          latencyMs: inst.port === 8077 ? Math.floor(32 + Math.random() * 8) : Math.floor(38 + Math.random() * 9),
-        }))
-      );
-      const now = new Date();
-      setLastPingTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`);
-      setIsHealthChecking(false);
-    }, 450);
+    const [h8077, h8099] = await Promise.all([
+      checkHealth(8077),
+      checkHealth(8099),
+    ]);
+
+    setInstances((prev) =>
+      prev.map((inst) => {
+        if (inst.port === 8077) {
+          const isHealthy = h8077.ok;
+          return {
+            ...inst,
+            status: isHealthy ? 'healthy' : 'down',
+            latencyMs: h8077.latencyMs,
+            activeModel: isHealthy
+              ? (h8077.data?.model_loaded ? 'Production (v1-local)' : '지연 로딩 대기')
+              : '연결 대기 (FastAPI 8077)',
+          };
+        }
+        if (inst.port === 8099) {
+          const isHealthy = h8099.ok;
+          return {
+            ...inst,
+            status: isHealthy ? 'healthy' : 'down',
+            latencyMs: h8099.latencyMs,
+            activeModel: isHealthy
+              ? (h8099.data?.model_loaded ? 'Production-v2 (Gunicorn+Uvicorn)' : '지연 로딩 대기')
+              : 'Docker 미기동 (8077 로컬 활성)',
+          };
+        }
+        return inst;
+      })
+    );
+
+    const now = new Date();
+    setLastPingTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`);
+    setIsHealthChecking(false);
   };
 
   const handleSaveSettings = (e: React.FormEvent) => {
@@ -82,9 +163,37 @@ export const ServingPage: React.FC = () => {
     setSafetyBuffer(20);
   };
 
-  const handleRunPlaygroundInference = () => {
+  const handleRunPlaygroundInference = async () => {
     setIsInferencing(true);
-    setTimeout(() => {
+    const sequence = generatePredictSequence(testChannel, testAvgSales, testIsWeekend, false);
+    const result = await predictSales(sequence, testPort);
+
+    if (result.ok && result.data) {
+      setInferenceResult({
+        status: 200,
+        latencyMs: result.latencyMs,
+        data: {
+          status: 'success',
+          endpoint: `http://localhost:${testPort}/predict`,
+          platform: result.data.platform,
+          prediction_date: result.data.prediction_date,
+          predicted_sales_qty: result.data.predicted_sales_qty,
+          model_version: result.data.model_version,
+          input_parameters: {
+            past_20d_mean: testAvgSales,
+            is_weekend: testIsWeekend,
+            serving_port: testPort,
+          },
+          execution_metadata: {
+            serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
+            latency_ms: result.latencyMs,
+            timestamp: new Date().toISOString(),
+            source: 'live_fastapi_backend',
+          },
+        },
+      });
+    } else {
+      // 오프라인 fallback: 백엔드가 미기동 상태여도 UI 정상 동작 유지
       const channelBase: Record<string, number> = {
         brandi: testIsWeekend ? 72 : 48,
         zigzag: testIsWeekend ? 44 : 32,
@@ -99,29 +208,28 @@ export const ServingPage: React.FC = () => {
         status: 200,
         latencyMs: simulatedLatency,
         data: {
-          status: 'success',
+          status: 'success (오프라인 시뮬레이션 모드)',
           endpoint: `http://localhost:${testPort}/predict`,
           platform: testChannel,
+          prediction_date: '2026-10-01',
+          predicted_sales_qty: calculatedDemand,
+          model_version: 'v1-local (Fallback)',
           input_parameters: {
             past_20d_mean: testAvgSales,
             is_weekend: testIsWeekend,
             serving_port: testPort,
           },
-          prediction: {
-            predicted_units: calculatedDemand,
-            confidence_interval_95: [Math.round(calculatedDemand * 0.92), Math.round(calculatedDemand * 1.08)],
-            model_version: 'Production-v2',
-            model_architecture: 'GRU (32-16) + Residual',
-          },
           execution_metadata: {
             serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
             latency_ms: simulatedLatency,
             timestamp: new Date().toISOString(),
+            source: 'offline_fallback',
+            notice: '백엔드 응답 지연으로 안전 폴백 데이터를 표시합니다.',
           },
         },
       });
-      setIsInferencing(false);
-    }, 500);
+    }
+    setIsInferencing(false);
   };
 
   return (
@@ -212,7 +320,10 @@ export const ServingPage: React.FC = () => {
                 <span className="text-xs font-semibold text-stibee-ink">
                   {instance.name}
                 </span>
-                <StatusBadge variant="normal" label="정상 가동 중" />
+                <StatusBadge
+                  variant={instance.status === 'healthy' ? 'normal' : 'urgent'}
+                  label={instance.status === 'healthy' ? '정상 가동 중' : '오프라인 (연결 대기)'}
+                />
               </div>
 
               <div className="space-y-1.5 text-xs text-stibee-ink pt-1">
@@ -240,6 +351,126 @@ export const ServingPage: React.FC = () => {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Sales Dataset Management (GET /data/status, POST /data/upload) */}
+      <div className="bg-white border border-stibee-hairline rounded-[4px] p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileText size={16} className="text-stibee-coral" />
+              <h2 className="text-base font-semibold text-stibee-ink">
+                판매량 CSV 데이터셋 관리 (GET /data/status, POST /data/upload)
+              </h2>
+            </div>
+            <p className="text-xs text-stibee-caption mt-0.5">
+              서빙 모델 평가 및 AIOps 파이프라인의 기준이 되는 8개 피처 시계열 원본 데이터를 조회하고 업로드합니다.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept=".csv"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="h-9 px-4 bg-white border border-stibee-border hover:bg-stibee-surface text-stibee-ink text-xs font-medium rounded-[4px] transition-colors flex items-center gap-2 disabled:opacity-50"
+            >
+              <UploadCloud size={13} className={isUploading ? 'animate-spin' : 'text-stibee-coral'} />
+              <span>{isUploading ? '업로드 처리 중...' : '새 판매량 CSV 업로드'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={fetchDataStatus}
+              className="h-9 px-3 bg-white border border-stibee-hairline hover:bg-stibee-surface text-stibee-caption hover:text-stibee-ink text-xs rounded-[4px] transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw size={12} />
+              <span>상태 조회</span>
+            </button>
+          </div>
+        </div>
+
+        {uploadToast && (
+          <div
+            className={`p-3 border rounded-[4px] text-xs flex items-center justify-between animate-in fade-in duration-150 ${
+              uploadToast.type === 'error'
+                ? 'bg-[#fff5f5] border-[#fca5a5] text-[#991b1b]'
+                : 'bg-stibee-surface border-stibee-border text-stibee-ink'
+            }`}
+          >
+            <span>{uploadToast.message}</span>
+            <span
+              className={`font-medium ml-2 ${
+                uploadToast.type === 'error' ? 'text-[#dc2626]' : 'text-stibee-coral'
+              }`}
+            >
+              {uploadToast.type === 'error' ? '오류' : '완료'}
+            </span>
+          </div>
+        )}
+
+        {dataStatus?.exists ? (
+          <div className="space-y-3 pt-1">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-stibee-surface p-3 rounded-[4px] border border-stibee-hairline">
+              <div>
+                <span className="text-stibee-caption block text-[11px]">업로드 파일명</span>
+                <span className="font-mono font-medium text-stibee-ink">{dataStatus.filename}</span>
+              </div>
+              <div>
+                <span className="text-stibee-caption block text-[11px]">총 데이터 건수</span>
+                <span className="font-medium text-stibee-ink">{dataStatus.rows?.toLocaleString()}행</span>
+              </div>
+              <div>
+                <span className="text-stibee-caption block text-[11px]">데이터 수집 기간</span>
+                <span className="font-mono text-stibee-ink">{dataStatus.start_date} ~ {dataStatus.end_date}</span>
+              </div>
+              <div>
+                <span className="text-stibee-caption block text-[11px]">기준 일자 (UTC)</span>
+                <span className="font-mono text-stibee-ink">{dataStatus.as_of_date}</span>
+              </div>
+            </div>
+
+            {dataStatus.platforms && Object.keys(dataStatus.platforms).length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                {Object.entries(dataStatus.platforms).map(([plat, stat]) => (
+                  <div key={plat} className="p-3 bg-white border border-stibee-hairline rounded-[4px] text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-stibee-ink uppercase">{plat}</span>
+                      <span className="text-stibee-caption text-[11px]">{stat.days_since_latest}일 전 최신화</span>
+                    </div>
+                    <div className="flex justify-between text-stibee-muted pt-1">
+                      <span>행 수</span>
+                      <span className="font-medium text-stibee-ink">{stat.rows}행</span>
+                    </div>
+                    <div className="flex justify-between text-stibee-muted">
+                      <span>판매량 범위</span>
+                      <span className="font-medium text-stibee-ink">{stat.min_sales_qty} ~ {stat.max_sales_qty}개</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 bg-stibee-surface border border-dashed border-stibee-border rounded-[4px] text-xs text-stibee-muted flex items-center justify-between">
+            <div>
+              <span className="font-medium text-stibee-ink">업로드된 별도 CSV 데이터셋이 없습니다.</span>
+              <p className="text-[11px] text-stibee-caption mt-0.5">
+                현재 기본 합성 데이터셋(data/synthetic/sales_drift_brandi.csv)을 참조하여 서빙 및 AIOps가 동작 중입니다.
+              </p>
+            </div>
+            <span className="text-[11px] text-stibee-caption bg-white px-2 py-1 rounded-[3px] border border-stibee-hairline">
+              GET /data/status: exists=false
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Interactive API Inference Playground Card */}
@@ -371,7 +602,7 @@ export const ServingPage: React.FC = () => {
 
             <div className="pt-2 border-t border-[#333] text-[10px] text-[#888] flex items-center justify-between">
               <span>FastAPI v0.115 / Uvicorn Worker</span>
-              <span>Model: Production-v2 (MLflow: 2.16.2)</span>
+              <span>Model: LSTM (32-32-16) / Production</span>
             </div>
           </div>
         </div>
@@ -386,6 +617,9 @@ export const ServingPage: React.FC = () => {
             </h2>
             <p className="text-xs text-stibee-caption mt-0.5">
               비즈니스 변동성과 과적합 방지를 위한 핵심 운영 정책 수치를 설정합니다.
+            </p>
+            <p className="text-[11px] text-stibee-muted mt-1">
+              (안내: 본 설정은 프론트엔드 모니터링 임계치와 시뮬레이션 정책에 즉시 적용되며, 백엔드 서버 파라미터는 백엔드 설정 파일을 따릅니다.)
             </p>
           </div>
           <button

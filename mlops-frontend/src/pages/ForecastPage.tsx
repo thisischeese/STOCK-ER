@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { PlatformId, NavigationTab } from '../types';
+import { PlatformId, NavigationTab, DailySalesDataPoint } from '../types';
 import {
   mockPlatformSummaries,
   mockDailySalesHistory,
@@ -8,6 +8,13 @@ import {
 import { MetricCard } from '../components/common/MetricCard';
 import { DemandLineChart } from '../components/common/DemandLineChart';
 import { StatusBadge } from '../components/common/StatusBadge';
+import {
+  predictSales,
+  runBatchTest,
+  generatePredictSequence,
+  generateDriftBatchRows,
+  formatWape,
+} from '../services/api';
 
 interface ForecastPageProps {
   onNavigateTab: (tab: NavigationTab) => void;
@@ -18,11 +25,20 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
   const [timeframe, setTimeframe] = useState<'14d' | '30d' | '60d'>('14d');
   const [isInferencing, setIsInferencing] = useState(false);
   const [inferenceSuccess, setInferenceSuccess] = useState(false);
+  const [inferenceFeedback, setInferenceFeedback] = useState<{
+    message: string;
+    latencyText: string;
+  } | null>(null);
+  const [livePredictedQty, setLivePredictedQty] = useState<number | null>(null);
+  const [liveChartData, setLiveChartData] = useState<DailySalesDataPoint[] | null>(null);
+  const [liveWape, setLiveWape] = useState<string | null>(null);
+  const [liveHasDrift, setLiveHasDrift] = useState<boolean | null>(null);
+  const [isLiveFromBackend, setIsLiveFromBackend] = useState<boolean>(false);
 
   const activeSummary = mockPlatformSummaries[selectedChannel];
 
   const currentChannelHistory = React.useMemo(() => {
-    const raw = mockChannelSalesHistory[selectedChannel] || mockDailySalesHistory;
+    const raw = liveChartData || mockChannelSalesHistory[selectedChannel] || mockDailySalesHistory;
     if (timeframe === '14d') {
       return raw.slice(-14);
     }
@@ -30,15 +46,71 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       return raw.slice(-30);
     }
     return raw.slice(-60);
-  }, [selectedChannel, timeframe]);
+  }, [selectedChannel, timeframe, liveChartData]);
 
-  const handleRunInference = () => {
+  const handleRunInference = async () => {
     setIsInferencing(true);
-    setTimeout(() => {
-      setIsInferencing(false);
+    setInferenceSuccess(false);
+
+    const platform = selectedChannel === 'all' ? 'brandi' : selectedChannel;
+    const batchRows = generateDriftBatchRows(platform);
+    const seq = generatePredictSequence(platform, 45, false, false);
+
+    // 단건 추론과 배치 윈도우 추론을 병렬 호출하여 실제 Keras 서빙 모델 결과 수신
+    const [predictRes, batchRes] = await Promise.all([
+      predictSales(seq, 8077),
+      runBatchTest(batchRows, 8077),
+    ]);
+
+    if (predictRes.ok && predictRes.data) {
+      setLivePredictedQty(Math.round(predictRes.data.predicted_sales_qty));
+      setIsLiveFromBackend(true);
+
+      if (batchRes.ok && batchRes.data && batchRes.data.predictions.length > 0) {
+        const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+        const transformedPoints: DailySalesDataPoint[] = batchRes.data.predictions.map((p) => {
+          const d = new Date(p.date);
+          const month = (d.getMonth() + 1).toString().padStart(2, '0');
+          const day = d.getDate().toString().padStart(2, '0');
+          return {
+            date: `${month}.${day}`,
+            dayOfWeek: dayNames[d.getDay()],
+            isWeekend: d.getDay() === 0 || d.getDay() === 6,
+            actual: p.actual_sales_qty,
+            predicted: Math.round(p.predicted_sales_qty),
+            driftOccurred: platform === 'brandi' && (p.actual_sales_qty > 70),
+          };
+        });
+        setLiveChartData(transformedPoints);
+
+        const platMetric = batchRes.data.drift_check.platforms?.[platform];
+        if (platMetric) {
+          setLiveWape(formatWape(platMetric.wape));
+          setLiveHasDrift(platMetric.drift);
+        }
+      }
+
+      setInferenceFeedback({
+        message: `FastAPI 서빙 모델(8077)로부터 ${platform} 채널 실시간 추론 시계열을 동기화했습니다. (내일 예측: ${predictRes.data.predicted_sales_qty}개, 버전: ${predictRes.data.model_version})`,
+        latencyText: `지연시간: ${predictRes.latencyMs}ms`,
+      });
       setInferenceSuccess(true);
-      setTimeout(() => setInferenceSuccess(false), 3000);
-    }, 700);
+      setTimeout(() => setInferenceSuccess(false), 4000);
+    } else {
+      setIsLiveFromBackend(false);
+      setLivePredictedQty(null);
+      setLiveChartData(null);
+      setLiveWape(null);
+      setLiveHasDrift(null);
+      setInferenceFeedback({
+        message: '백엔드 서빙 인스턴스(8077) 연결 실패: 서버가 오프라인이거나 응답하지 않아 로컬 기준 데이터를 표시합니다.',
+        latencyText: '연결 실패',
+      });
+      setInferenceSuccess(false);
+      setTimeout(() => setInferenceFeedback(null), 5000);
+    }
+
+    setIsInferencing(false);
   };
 
   return (
@@ -66,10 +138,18 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
         </div>
       </div>
 
-      {inferenceSuccess && (
-        <div className="p-3 bg-stibee-surface border border-stibee-border rounded-[4px] text-xs text-stibee-ink flex items-center justify-between animate-in fade-in duration-150">
-          <span>FastAPI 서빙 인스턴스(8077/8099)로부터 최신 20일 시계열 추론 결과를 동기화했습니다.</span>
-          <span className="text-stibee-caption">지연시간: 38ms</span>
+      {inferenceFeedback && (
+        <div
+          className={`p-3 border rounded-[4px] text-xs flex items-center justify-between animate-in fade-in duration-150 ${
+            inferenceSuccess
+              ? 'bg-stibee-surface border-stibee-border text-stibee-ink'
+              : 'bg-[#fff5f5] border-[#fca5a5] text-[#991b1b]'
+          }`}
+        >
+          <span>{inferenceFeedback.message}</span>
+          <span className={inferenceSuccess ? 'text-stibee-caption' : 'text-[#dc2626] font-medium'}>
+            {inferenceFeedback.latencyText}
+          </span>
         </div>
       )}
 
@@ -77,16 +157,20 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           label="내일 총 예상 주문량"
-          value={activeSummary.tomorrowPredicted}
+          value={livePredictedQty !== null && selectedChannel !== 'all' ? livePredictedQty : activeSummary.tomorrowPredicted}
           unit="개"
-          deltaText="전주 대비 +34.2%"
+          deltaText={livePredictedQty !== null ? "FastAPI 실시간 추론치 반영" : "전주 대비 +34.2%"}
           description="채널별 가중치 합산 1일 판매량"
         />
         <MetricCard
           label="최근 21일 롤링 WAPE"
-          value={`${activeSummary.wape21d}%`}
-          isAlert={activeSummary.hasDrift}
-          deltaText={activeSummary.hasDrift ? `이전 ${activeSummary.prevWape}% 대비 급증` : '정상 범위'}
+          value={liveWape !== null ? liveWape : `${activeSummary.wape21d}%`}
+          isAlert={liveHasDrift !== null ? liveHasDrift : activeSummary.hasDrift}
+          deltaText={
+            liveHasDrift !== null
+              ? (liveHasDrift ? '임계치(20.0%) 초과 드리프트 감지' : '정상 범위 유지')
+              : (activeSummary.hasDrift ? `이전 ${activeSummary.prevWape}% 대비 급증` : '정상 범위')
+          }
           description="예측 오차율 (목표 20.0% 이하)"
         />
         <MetricCard
@@ -97,9 +181,17 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
         />
         <MetricCard
           label="데이터 드리프트 감지"
-          value={activeSummary.hasDrift ? '1개 채널' : '0건'}
-          isAlert={activeSummary.hasDrift}
-          deltaText={activeSummary.hasDrift ? '브랜디 빠른 배송 패턴 변화' : '전 채널 정상'}
+          value={
+            liveHasDrift !== null
+              ? (liveHasDrift ? '1개 채널 감지' : '0건 (정상)')
+              : (activeSummary.hasDrift ? '1개 채널' : '0건')
+          }
+          isAlert={liveHasDrift !== null ? liveHasDrift : activeSummary.hasDrift}
+          deltaText={
+            liveHasDrift !== null
+              ? (liveHasDrift ? '브랜디 빠른 배송 패턴 변화 감지' : '전 채널 정상 운영')
+              : (activeSummary.hasDrift ? '브랜디 빠른 배송 패턴 변화' : '전 채널 정상')
+          }
           description="주말 판매 급증으로 인한 영구적 변화"
         />
       </div>
@@ -112,12 +204,18 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
             <div>
               <h2 className="text-base font-semibold text-stibee-ink flex flex-wrap items-center gap-2">
                 <span>{activeSummary.name} 실제 판매량 vs 모델 예측 추이</span>
-                <span className="text-xs font-normal text-stibee-caption px-2 py-0.5 bg-stibee-surface border border-stibee-hairline rounded-[3px]">
-                  {activeSummary.deliveryService}
-                </span>
+                {isLiveFromBackend ? (
+                  <span className="text-xs font-normal text-[#1b7e32] px-2 py-0.5 bg-[#eefbf0] border border-[#a3e635]/40 rounded-[3px]">
+                    FastAPI Keras 실시간 추론 시계열
+                  </span>
+                ) : (
+                  <span className="text-xs font-normal text-stibee-caption px-2 py-0.5 bg-stibee-surface border border-stibee-hairline rounded-[3px]">
+                    {activeSummary.deliveryService}
+                  </span>
+                )}
               </h2>
               <p className="text-xs text-stibee-caption mt-0.5">
-                과거 20일 시계열 입력 기반 GRU 32-16 모델의 익일 판매량 예측 성능 검증
+                과거 20일 시계열 입력 기반 LSTM (32-32-16) 모델의 익일 판매량 예측 성능 검증
               </p>
             </div>
 
@@ -243,7 +341,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
               플랫폼별 예측 지표 및 모델 서빙 상세
             </h2>
             <p className="text-xs text-stibee-caption mt-0.5">
-              각 이커머스 입점 채널별 배송 조건과 GRU 추론 모델 품질 현황
+              각 이커머스 입점 채널별 배송 조건과 LSTM (32-32-16) 추론 모델 품질 현황
             </p>
           </div>
           <button

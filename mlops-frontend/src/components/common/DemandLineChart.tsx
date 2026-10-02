@@ -339,7 +339,7 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
           </div>
           <div className="flex items-center gap-2">
             <span className="w-5 h-[2px] border-t-2 border-dashed border-[#ff6464] inline-block" />
-            <span className="text-stibee-coral font-medium">GRU 모델 예측치</span>
+            <span className="text-stibee-coral font-medium">LSTM 모델 예측치</span>
           </div>
           <div className="flex items-center gap-1.5 text-stibee-caption">
             <span className="w-3 h-3 bg-[#f8f8f8] border border-stibee-hairline inline-block rounded-[2px]" />
@@ -348,7 +348,7 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
         </div>
 
         <div className="text-[11px] text-stibee-caption">
-          과거 20일 시계열 입력 기반 GRU 32-16 추론 결과
+          과거 20일 시계열 입력 기반 LSTM (32-32-16) 추론 결과
         </div>
       </div>
     </div>

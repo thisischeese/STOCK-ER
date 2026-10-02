@@ -39,7 +39,11 @@ def check_and_trigger(recent_predictions: list[dict]) -> dict:
     from serving_app import model_loader
 
     try:
-        frame = load_sales_data(latest_upload(), min_rows_per_platform=WINDOW_SIZE + SEQ_LEN)
+        try:
+            upload_path = latest_upload()
+        except FileNotFoundError:
+            upload_path = "data/synthetic/sales_drift_brandi.csv"
+        frame = load_sales_data(upload_path, min_rows_per_platform=WINDOW_SIZE + SEQ_LEN)
         rows = frame.sort_values("Date").groupby("Platform", sort=False).tail(WINDOW_SIZE + SEQ_LEN)
         # 실제 드리프트가 있을 때만 무거운 학습 의존성을 로드한다.
         from serving_app.train_and_register import fine_tune
