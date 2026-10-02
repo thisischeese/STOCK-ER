@@ -11,7 +11,6 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentTab,
   onTabChange,
-  servingHealthy = true,
 }) => {
   const tabs: { id: NavigationTab; label: string }[] = [
     { id: 'forecast', label: '수요 예측' },
@@ -20,25 +19,29 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'serving', label: '서빙 설정' },
   ];
 
+  const currentDateText = React.useMemo(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+    const dayName = dayNames[now.getDay()];
+    return `${year}.${month}.${day} (${dayName})`;
+  }, []);
+
   return (
     <header className="sticky top-0 z-40 w-full bg-white border-b border-stibee-hairline">
       <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
-        {/* Left: Brand Identity & Store Badge */}
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2 cursor-pointer select-none">
-            <span className="font-semibold text-xl tracking-tight text-stibee-ink">
-              STOCKER
-            </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-stibee-coral -ml-1 mt-0.5" />
-          </div>
-
-          <div className="hidden sm:flex items-center gap-2 pl-4 border-l border-stibee-hairline text-xs text-stibee-caption">
-            <span>러블리마켓 (동대문 사입 20품목)</span>
-          </div>
+        {/* Left: Brand Identity */}
+        <div className="flex items-center gap-2 cursor-pointer select-none">
+          <span className="font-semibold text-xl tracking-tight text-stibee-ink">
+            STOCKER
+          </span>
+          <span className="w-1.5 h-1.5 rounded-full bg-stibee-coral -ml-1 mt-0.5" />
         </div>
 
         {/* Center: Main Navigation Tabs */}
-        <nav className="flex items-center space-x-1 h-full">
+        <nav className="flex items-center space-x-1 h-full overflow-x-auto scrollbar-none">
           {tabs.map((tab) => {
             const isActive = currentTab === tab.id;
             return (
@@ -61,24 +64,9 @@ export const Header: React.FC<HeaderProps> = ({
           })}
         </nav>
 
-        {/* Right: Operational Status & Date */}
-        <div className="flex items-center gap-4 text-xs">
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1 bg-stibee-surface border border-stibee-hairline rounded-[4px] text-stibee-caption">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                servingHealthy ? 'bg-stibee-ink' : 'bg-stibee-coral'
-              }`}
-            />
-            <span>FastAPI 8077 / 8099 서빙 정상</span>
-          </div>
-
-          <div className="text-stibee-caption hidden lg:block">
-            2026.10.01 (목)
-          </div>
-
-          <div className="text-stibee-ink font-medium pl-3 border-l border-stibee-hairline">
-            이승민
-          </div>
+        {/* Right: Current Dynamic Date */}
+        <div className="flex items-center text-xs text-stibee-caption font-normal">
+          <span>{currentDateText}</span>
         </div>
       </div>
     </header>

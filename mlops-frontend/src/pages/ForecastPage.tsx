@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { PlatformId, NavigationTab } from '../types';
-import { mockPlatformSummaries, mockDailySalesHistory } from '../mock/mockData';
+import {
+  mockPlatformSummaries,
+  mockDailySalesHistory,
+  mockChannelSalesHistory,
+} from '../mock/mockData';
 import { MetricCard } from '../components/common/MetricCard';
 import { DemandLineChart } from '../components/common/DemandLineChart';
 import { StatusBadge } from '../components/common/StatusBadge';
@@ -16,6 +20,14 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
   const [inferenceSuccess, setInferenceSuccess] = useState(false);
 
   const activeSummary = mockPlatformSummaries[selectedChannel];
+
+  const currentChannelHistory = React.useMemo(() => {
+    const raw = mockChannelSalesHistory[selectedChannel] || mockDailySalesHistory;
+    if (timeframe === '14d') {
+      return raw.slice(-14);
+    }
+    return raw;
+  }, [selectedChannel, timeframe]);
 
   const handleRunInference = () => {
     setIsInferencing(true);
@@ -95,8 +107,11 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
         <div className="lg:col-span-8 bg-white border border-stibee-hairline rounded-[4px] p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
             <div>
-              <h2 className="text-base font-semibold text-stibee-ink">
-                일별 실제 판매량 vs 모델 예측 추이
+              <h2 className="text-base font-semibold text-stibee-ink flex flex-wrap items-center gap-2">
+                <span>{activeSummary.name} 실제 판매량 vs 모델 예측 추이</span>
+                <span className="text-xs font-normal text-stibee-caption px-2 py-0.5 bg-stibee-surface border border-stibee-hairline rounded-[3px]">
+                  {activeSummary.deliveryService}
+                </span>
               </h2>
               <p className="text-xs text-stibee-caption mt-0.5">
                 과거 20일 시계열 입력 기반 GRU 32-16 모델의 익일 판매량 예측 성능 검증
@@ -143,7 +158,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
 
           {/* Interactive Chart */}
           <div className="py-2">
-            <DemandLineChart data={mockDailySalesHistory} height={300} />
+            <DemandLineChart data={currentChannelHistory} height={300} />
           </div>
         </div>
 

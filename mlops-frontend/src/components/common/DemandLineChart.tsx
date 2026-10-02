@@ -214,32 +214,49 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
           })}
         </svg>
 
-        {/* Hover Tooltip Box */}
-        {hoverIndex !== null && (
-          <div className="absolute top-2 right-4 bg-white border border-stibee-hairline rounded-[4px] px-3.5 py-2 text-xs flex items-center gap-4 pointer-events-none transition-all">
-            <div className="flex items-center gap-1.5 font-medium text-stibee-ink">
-              <span>{data[hoverIndex].date} ({data[hoverIndex].dayOfWeek})</span>
-              {data[hoverIndex].isWeekend && (
-                <span className="text-[10px] text-stibee-muted bg-stibee-surface px-1 py-0.2 rounded-[2px]">
-                  주말
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 text-stibee-muted">
-              <span className="inline-block w-2.5 h-0.5 bg-[#202124]" />
-              <span>실제 판매:</span>
-              <strong className="text-stibee-ink">{data[hoverIndex].actual}개</strong>
-            </div>
-            <div className="flex items-center gap-1 text-stibee-muted">
-              <span className="inline-block w-2.5 h-0.5 border-t-2 border-dashed border-[#ff6464]" />
-              <span>모델 예측:</span>
-              <strong className="text-stibee-coral">{data[hoverIndex].predicted}개</strong>
-            </div>
-            <div className="text-[11px] text-stibee-caption pl-1 border-l border-stibee-hairline">
-              오차: {Math.abs(data[hoverIndex].actual - data[hoverIndex].predicted)}개
-            </div>
-          </div>
-        )}
+        {/* Hover / Current Tooltip Status Bar */}
+        <div className="absolute top-1 right-2 bg-white/95 border border-stibee-hairline rounded-[4px] px-3.5 py-1.5 text-xs flex items-center gap-4 transition-all">
+          {hoverIndex !== null ? (
+            <>
+              <div className="flex items-center gap-1.5 font-medium text-stibee-ink">
+                <span>{data[hoverIndex].date} ({data[hoverIndex].dayOfWeek})</span>
+                {data[hoverIndex].isWeekend && (
+                  <span className="text-[10px] text-stibee-muted bg-stibee-surface px-1 py-0.2 rounded-[2px]">
+                    주말
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 text-stibee-muted">
+                <span className="inline-block w-2.5 h-0.5 bg-[#202124]" />
+                <span>실제:</span>
+                <strong className="text-stibee-ink">{data[hoverIndex].actual}개</strong>
+              </div>
+              <div className="flex items-center gap-1 text-stibee-muted">
+                <span className="inline-block w-2.5 h-0.5 border-t-2 border-dashed border-[#ff6464]" />
+                <span>예측:</span>
+                <strong className="text-stibee-coral">{data[hoverIndex].predicted}개</strong>
+              </div>
+              <div className="text-[11px] text-stibee-caption pl-1 border-l border-stibee-hairline">
+                오차: {Math.abs(data[hoverIndex].actual - data[hoverIndex].predicted)}개
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="text-stibee-caption">마지막 집계일:</span>
+              <span className="font-medium text-stibee-ink">
+                {data[data.length - 1].date} ({data[data.length - 1].dayOfWeek})
+              </span>
+              <div className="flex items-center gap-1 text-stibee-muted">
+                <span>실제:</span>
+                <strong className="text-stibee-ink">{data[data.length - 1].actual}개</strong>
+              </div>
+              <div className="flex items-center gap-1 text-stibee-muted">
+                <span>예측:</span>
+                <strong className="text-stibee-coral">{data[data.length - 1].predicted}개</strong>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Legend & Clarifications */}
