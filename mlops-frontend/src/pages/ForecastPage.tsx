@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { PlatformId, NavigationTab, DailySalesDataPoint } from '../types';
 import {
   mockPlatformSummaries,
@@ -12,7 +12,7 @@ import {
   predictSales,
   runBatchTest,
   generatePredictSequence,
-  generateDriftBatchRows,
+  generateNormalBatchRows,
   formatWape,
 } from '../services/api';
 
@@ -43,7 +43,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
 
   const activeSummary = mockPlatformSummaries[selectedChannel];
 
-  const currentChannelHistory = React.useMemo(() => {
+  const currentChannelHistory = useMemo(() => {
     const raw = liveChartData || mockChannelSalesHistory[selectedChannel] || mockDailySalesHistory;
     if (timeframe === '14d') {
       return raw.slice(-14);
@@ -54,70 +54,89 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
     return raw.slice(-60);
   }, [selectedChannel, timeframe, liveChartData]);
 
+  const isInferenceRunningRef = useRef(false);
+
   const handleRunInference = async () => {
+    if (isInferenceRunningRef.current) return;
+    isInferenceRunningRef.current = true;
     setIsInferencing(true);
     setInferenceSuccess(false);
 
-    const platform = selectedChannel === 'all' ? 'brandi' : selectedChannel;
-    const batchRows = generateDriftBatchRows(platform);
-    const seq = generatePredictSequence(platform, 45, false, false);
+    try {
+      const platform = selectedChannel === 'all' ? 'brandi' : selectedChannel;
+      const batchRows = generateNormalBatchRows(platform);
+      const seq = generatePredictSequence(platform, 42, false, false);
 
-    // 단건 추론과 배치 윈도우 추론을 병렬 호출하여 실제 Keras 서빙 모델 결과 수신
-    const [predictRes, batchRes] = await Promise.all([
-      predictSales(seq, 8077),
-      runBatchTest(batchRows, 8077),
-    ]);
+      // 단건 추론과 정상 시계열 배치 평가를 병렬 호출하여 실제 Keras 서빙 모델 결과 수신
+      const [predictRes, batchRes] = await Promise.all([
+        predictSales(seq, 8077),
+        runBatchTest(batchRows, 8077),
+      ]);
 
-    if (predictRes.ok && predictRes.data) {
-      setLivePredictedQty(Math.round(predictRes.data.predicted_sales_qty));
-      setIsLiveFromBackend(true);
+      if (predictRes.ok && predictRes.data) {
+        setLivePredictedQty(Math.round(predictRes.data.predicted_sales_qty));
+        setIsLiveFromBackend(true);
 
-      if (batchRes.ok && batchRes.data && batchRes.data.predictions.length > 0) {
-        const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
-        const transformedPoints: DailySalesDataPoint[] = batchRes.data.predictions.map((p) => {
-          const d = new Date(p.date);
-          const month = (d.getMonth() + 1).toString().padStart(2, '0');
-          const day = d.getDate().toString().padStart(2, '0');
-          return {
-            date: `${month}.${day}`,
-            dayOfWeek: dayNames[d.getDay()],
-            isWeekend: d.getDay() === 0 || d.getDay() === 6,
-            actual: p.actual_sales_qty,
-            predicted: Math.round(p.predicted_sales_qty),
-            driftOccurred: platform === 'brandi' && (p.actual_sales_qty > 70),
-          };
-        });
-        setLiveChartData(transformedPoints);
-
-        const platMetric = batchRes.data.drift_check.platforms?.[platform];
-        if (platMetric) {
-          setLiveWape(formatWape(platMetric.wape));
-          setLiveHasDrift(platMetric.drift);
-        }
-
-        if (batchRes.data.drift_check.platforms) {
-          const metrics: Record<string, { wape: string; drift: boolean; rmse?: number }> = {};
-          Object.entries(batchRes.data.drift_check.platforms).forEach(([pKey, pVal]) => {
-            metrics[pKey] = {
-              wape: formatWape(pVal.wape),
-              drift: Boolean(pVal.drift),
-              rmse: pVal.rmse,
+        if (batchRes.ok && batchRes.data && batchRes.data.predictions.length > 0) {
+          const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+          const transformedPoints: DailySalesDataPoint[] = batchRes.data.predictions.map((p) => {
+            const d = new Date(p.date);
+            const month = (d.getMonth() + 1).toString().padStart(2, '0');
+            const day = d.getDate().toString().padStart(2, '0');
+            return {
+              date: `${month}.${day}`,
+              dayOfWeek: dayNames[d.getDay()],
+              isWeekend: d.getDay() === 0 || d.getDay() === 6,
+              actual: p.actual_sales_qty,
+              predicted: Math.round(p.predicted_sales_qty),
+              driftOccurred: false,
             };
           });
-          setLivePlatformMetrics(metrics);
-        }
-        if (batchRes.data.model_version) {
-          setLiveModelVersion(batchRes.data.model_version);
-        }
-      }
+          setLiveChartData(transformedPoints);
 
-      setInferenceFeedback({
-        message: `FastAPI 서빙 모델(8077)로부터 ${platform} 채널 실시간 추론 시계열을 동기화했습니다. (내일 예측: ${predictRes.data.predicted_sales_qty}개, 버전: ${predictRes.data.model_version})`,
-        latencyText: `지연시간: ${predictRes.latencyMs}ms`,
-      });
-      setInferenceSuccess(true);
-      setTimeout(() => setInferenceSuccess(false), 4000);
-    } else {
+          const platMetric = batchRes.data.drift_check.platforms?.[platform];
+          if (platMetric) {
+            setLiveWape(formatWape(platMetric.wape));
+            setLiveHasDrift(platMetric.drift);
+          }
+
+          if (batchRes.data.drift_check.platforms) {
+            const metrics: Record<string, { wape: string; drift: boolean; rmse?: number }> = {};
+            Object.entries(batchRes.data.drift_check.platforms).forEach(([pKey, pVal]) => {
+              metrics[pKey] = {
+                wape: formatWape(pVal.wape),
+                drift: Boolean(pVal.drift),
+                rmse: pVal.rmse,
+              };
+            });
+            setLivePlatformMetrics(metrics);
+          }
+          if (batchRes.data.model_version) {
+            setLiveModelVersion(batchRes.data.model_version);
+          }
+        }
+
+        setInferenceFeedback({
+          message: `FastAPI 서빙 모델(8077)로부터 ${platform} 채널 실시간 추론 시계열을 동기화했습니다. (내일 예측: ${predictRes.data.predicted_sales_qty}개, 버전: ${predictRes.data.model_version})`,
+          latencyText: `지연시간: ${predictRes.latencyMs}ms`,
+        });
+        setInferenceSuccess(true);
+        setTimeout(() => setInferenceSuccess(false), 4000);
+      } else {
+        setIsLiveFromBackend(false);
+        setLivePredictedQty(null);
+        setLiveChartData(null);
+        setLiveWape(null);
+        setLiveHasDrift(null);
+        setLivePlatformMetrics(null);
+        setInferenceFeedback({
+          message: '백엔드 서빙 인스턴스(8077) 연결 실패: 서버가 오프라인이거나 응답하지 않아 로컬 기준 데이터를 표시합니다.',
+          latencyText: '연결 실패',
+        });
+        setInferenceSuccess(false);
+        setTimeout(() => setInferenceFeedback(null), 5000);
+      }
+    } catch (err: any) {
       setIsLiveFromBackend(false);
       setLivePredictedQty(null);
       setLiveChartData(null);
@@ -125,14 +144,15 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
       setLiveHasDrift(null);
       setLivePlatformMetrics(null);
       setInferenceFeedback({
-        message: '백엔드 서빙 인스턴스(8077) 연결 실패: 서버가 오프라인이거나 응답하지 않아 로컬 기준 데이터를 표시합니다.',
-        latencyText: '연결 실패',
+        message: '추론 처리 중 오류가 발생하여 기본 기준 데이터를 유지합니다.',
+        latencyText: '처리 오류',
       });
       setInferenceSuccess(false);
       setTimeout(() => setInferenceFeedback(null), 5000);
+    } finally {
+      setIsInferencing(false);
+      isInferenceRunningRef.current = false;
     }
-
-    setIsInferencing(false);
   };
 
   useEffect(() => {

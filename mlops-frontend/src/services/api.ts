@@ -406,3 +406,47 @@ export function generateDriftBatchRows(
 
   return rows;
 }
+
+/**
+ * 일상 수요 예측 대시보드(ForecastPage)용 정상 45행 시계열 생성 헬퍼
+ * 불필요한 드리프트 재학습을 유발하지 않고, Keras 서빙 모델의 예측 곡선 및 실시간 WAPE를 수십 ms 만에 신속하게 수신합니다.
+ */
+export function generateNormalBatchRows(
+  platform: 'brandi' | 'zigzag' | 'ably' = 'brandi'
+): DailyPoint[] {
+  const rows: DailyPoint[] = [];
+  const baseDate = new Date('2026-08-15');
+  const meanMap: Record<string, number> = {
+    brandi: 42,
+    zigzag: 45,
+    ably: 28,
+  };
+  const baseSales = meanMap[platform] || 35;
+
+  for (let i = 0; i < 45; i++) {
+    const d = new Date(baseDate);
+    d.setDate(baseDate.getDate() + i);
+    const dateStr = d.toISOString().split('T')[0];
+    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+
+    let sales = baseSales + ((i * 3) % 5) - 2;
+    if (isWeekend && platform === 'brandi') {
+      sales = Math.round(sales * 1.25);
+    }
+    const orders = Math.max(5, Math.round(sales * 0.72));
+
+    rows.push({
+      Date: dateStr,
+      Platform: platform,
+      Sales_Qty: sales,
+      Orders: Math.min(orders, sales),
+      Fast_Delivery: platform === 'brandi' ? 1 : 0,
+      Fast_Days: platform === 'brandi' ? 1 : 0,
+      Active_SKU: 18,
+      Promo: 0,
+    });
+  }
+
+  return rows;
+}
+
