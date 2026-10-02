@@ -207,9 +207,8 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
             const x = getX(idx);
             const badgeWidth = 108;
             const badgeHeight = 18;
-            // If the badge overflows beyond width - paddingRight, position it on the left of the line
-            const placeOnLeft = x + 4 + badgeWidth > width - paddingRight;
-            const badgeX = placeOnLeft ? x - 4 - badgeWidth : x + 4;
+            // Uniformly positioned to the left of the dashed line across all timeframes (14d, 30d, 60d)
+            const badgeX = x - 4 - badgeWidth;
             const textX = badgeX + 6;
 
             return (
