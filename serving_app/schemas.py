@@ -1,43 +1,82 @@
-"""
-Day1: FastAPI 요청/응답 Pydantic 스키마.
+"""판매량 CSV와 같은 8개 필드를 사용하는 예측 및 배치 API 계약."""
+from datetime import date
+from typing import Literal
 
-LSTM은 한 시점의 값이 아니라 최근 SEQ_LEN(20)거래일의 흐름을 입력받아야 하므로,
-/predict는 단일 행이 아니라 "20거래일치 시퀀스"를 요청 본문으로 받습니다.
-이 검증 로직은 Day2 "데이터/모델 검증" 실습에서 다루는 것과 같은 종류입니다 -
-서빙 시점 입력 검증이 학습 시점 피처(data/features.py)와 어긋나지 않도록
-길이(SEQ_LEN)와 값 범위(gt=0, ge=0)를 스키마 단에서 강제합니다.
-"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from data.features import SEQ_LEN
 
 
 class DailyPoint(BaseModel):
-    close: float = Field(..., gt=0, description="해당 거래일 종가")
-    volume: int = Field(..., ge=0, description="해당 거래일 거래량")
+    model_config = ConfigDict(extra="forbid")
+    Date: date
+    Platform: Literal["brandi", "zigzag", "ably"]
+    Sales_Qty: int = Field(..., ge=0, strict=True)
+    Orders: int = Field(..., ge=0, strict=True)
+    Fast_Delivery: int = Field(..., ge=0, le=1, strict=True)
+    Fast_Days: int = Field(..., ge=0, strict=True)
+    Active_SKU: int = Field(..., ge=0, strict=True)
+    Promo: int = Field(..., ge=0, le=1, strict=True)
+
+    @model_validator(mode="after")
+    def check_orders(self):
+        if self.Orders > self.Sales_Qty:
+            raise ValueError("Orders는 Sales_Qty보다 클 수 없습니다.")
+        return self
+
+
+def validate_sales_rows(rows: list[DailyPoint], min_rows_per_platform: int):
+    keys = [(row.Date, row.Platform) for row in rows]
+    if len(set(keys)) != len(keys):
+        raise ValueError("(Date, Platform)이 중복된 행이 있습니다.")
+    counts = {}
+    for row in rows:
+        counts[row.Platform] = counts.get(row.Platform, 0) + 1
+    if not counts or any(n < min_rows_per_platform for n in counts.values()):
+        raise ValueError(f"포함된 플랫폼마다 최소 {min_rows_per_platform}행이 필요합니다.")
+
+
+SALES_ROWS = TypeAdapter(list[DailyPoint])
 
 
 class PredictRequest(BaseModel):
-    sequence: list[DailyPoint] = Field(
-        ...,
-        min_length=SEQ_LEN,
-        max_length=SEQ_LEN,
-        description=f"가장 오래된 날 -> 가장 최근 날 순서의 최근 {SEQ_LEN}거래일 시퀀스",
-    )
+    sequence: list[DailyPoint] = Field(..., min_length=SEQ_LEN, max_length=SEQ_LEN)
+
+    @model_validator(mode="after")
+    def check_sequence(self):
+        validate_sales_rows(self.sequence, SEQ_LEN)
+        if len({row.Platform for row in self.sequence}) != 1:
+            raise ValueError("예측 입력은 한 플랫폼의 20행이어야 합니다.")
+        dates = [row.Date for row in self.sequence]
+        if dates != sorted(dates):
+            raise ValueError("sequence는 Date 오름차순이어야 합니다.")
+        return self
 
 
 class PredictResponse(BaseModel):
-    predicted_close: float
+    platform: str
+    prediction_date: date
+    predicted_sales_qty: float
     model_version: str
 
 
 class BatchTestRequest(BaseModel):
-    # Day3 드리프트 시뮬레이션에서 사용 (scripts/simulate_drift.py 참고)
-    # SEQ_LEN + N 개의 연속된 종가를 보내면, 서버가 내부적으로 슬라이딩 윈도우로 잘라
-    # 여러 건을 연속 예측한다. (거래량은 시뮬레이션이므로 고정값을 사용)
-    prices: list[float] = Field(..., min_length=SEQ_LEN + 1)
+    rows: list[DailyPoint] = Field(..., min_length=SEQ_LEN + 21)
+
+    @model_validator(mode="after")
+    def check_rows(self):
+        validate_sales_rows(self.rows, SEQ_LEN + 21)
+        return self
+
+
+class BatchPrediction(BaseModel):
+    date: date
+    platform: str
+    actual_sales_qty: int
+    predicted_sales_qty: float
 
 
 class BatchTestResponse(BaseModel):
-    predictions: list[float]
+    predictions: list[BatchPrediction]
+    model_version: str
     drift_check: dict

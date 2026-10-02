@@ -8,9 +8,11 @@ serving_app 코드는 건드리지 않는 독립 검증 스크립트다. 피처 
 실행 (프로젝트 루트에서, generate_sales_data.py 실행 후):
     python scripts/validate_sales_data.py
 """
-import math
 import os
+import sys
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
@@ -18,9 +20,14 @@ import numpy as np
 import pandas as pd
 from tensorflow import keras
 
+from data.features import (
+    PLATFORMS,
+    SEQ_LEN,
+    SalesScaler,
+    build_sequences,
+)
+
 DATA_DIR = "data/synthetic"
-PLATFORMS = ["brandi", "zigzag", "ably"]
-SEQ_LEN = 20
 WINDOW = 21
 DRIFT_THRESHOLD = 0.20      # WAPE 20%
 TRAIN_RATIO = 0.8           # 기본 이력 앞 80% 학습, 뒤 20% 검증 (시간 순서 유지)
@@ -30,63 +37,13 @@ SEED = 42
 keras.utils.set_random_seed(SEED)
 
 
-class Scaler:
-    """log1p 판매 수량·주문 건수를 [0, 1]로 정규화. 학습 구간에서 한 번만 fit하고 재학습 때도 유지한다."""
-
-    def fit(self, df: pd.DataFrame) -> "Scaler":
-        self.lo = {c: math.log1p(df[c].min()) for c in ("Sales_Qty", "Orders")}
-        self.hi = {c: math.log1p(df[c].max()) for c in ("Sales_Qty", "Orders")}
-        return self
-
-    def scale(self, col: str, v):
-        return (np.log1p(v) - self.lo[col]) / (self.hi[col] - self.lo[col])
-
-    def inverse_sales(self, s):
-        return np.expm1(s * (self.hi["Sales_Qty"] - self.lo["Sales_Qty"]) + self.lo["Sales_Qty"])
-
-
-def feature_matrix(df: pd.DataFrame, scaler: Scaler) -> np.ndarray:
-    dow = pd.to_datetime(df["Date"]).dt.dayofweek.to_numpy()
-    onehot = np.stack([(df["Platform"] == p).to_numpy(dtype=float) for p in PLATFORMS], axis=1)
-    return np.column_stack([
-        scaler.scale("Sales_Qty", df["Sales_Qty"].to_numpy()),
-        scaler.scale("Orders", df["Orders"].to_numpy()),
-        df["Fast_Delivery"].to_numpy(dtype=float),
-        np.minimum(df["Fast_Days"].to_numpy(), 28) / 28,
-        np.sin(2 * np.pi * dow / 7),
-        np.cos(2 * np.pi * dow / 7),
-        df["Active_SKU"].to_numpy() / 20,
-        df["Promo"].to_numpy(dtype=float),
-        onehot,
-    ]).astype("float32")
-
-
-def sequences(df: pd.DataFrame, scaler: Scaler, last_n_rows: int | None = None):
-    """플랫폼별로 (20일 피처 → 다음 날 판매) 시퀀스를 만든다. 반환 : X, y(실제 수량), 타깃 날짜, 플랫폼."""
-    X, y, dates, plats = [], [], [], []
-    for p in PLATFORMS:
-        part = df[df["Platform"] == p].sort_values("Date")
-        if last_n_rows:
-            part = part.tail(last_n_rows)
-        feats = feature_matrix(part, scaler)
-        sales = part["Sales_Qty"].to_numpy()
-        d = part["Date"].to_numpy()
-        for i in range(len(part) - SEQ_LEN):
-            X.append(feats[i : i + SEQ_LEN])
-            y.append(sales[i + SEQ_LEN])
-            dates.append(d[i + SEQ_LEN])
-            plats.append(p)
-    return np.array(X), np.array(y, dtype=float), np.array(dates), np.array(plats)
-
-
 def build_model(n_features: int) -> keras.Model:
-    """GRU 32-16 + Dropout 0.1 구조 (이승민 최우수 모델 후보)."""
+    """GRU 2층(32→16) + 층 사이 Dropout 0.2 구조 (이슈 #1 기준 모델)."""
     model = keras.Sequential([
         keras.layers.Input(shape=(SEQ_LEN, n_features)),
         keras.layers.GRU(32, return_sequences=True),
-        keras.layers.Dropout(0.1),
+        keras.layers.Dropout(0.2),
         keras.layers.GRU(16),
-        keras.layers.Dropout(0.1),
         keras.layers.Dense(16, activation="relu"),
         keras.layers.Dense(1),
     ])
@@ -111,7 +68,7 @@ def stock_impact(actual, pred) -> tuple[int, int]:
 def judge_batch(model, scaler, path: str) -> dict:
     """업로드 파일의 플랫폼별 최근 41행(20 + 21)으로 21건 예측 → 플랫폼별 WAPE."""
     df = pd.read_csv(path)
-    X, y, _, plats = sequences(df, scaler, last_n_rows=SEQ_LEN + WINDOW)
+    X, y, _, plats = build_sequences(df, scaler, last_n_rows=SEQ_LEN + WINDOW)
     pred = predict_qty(model, X, scaler)
     return {p: wape(y[plats == p], pred[plats == p]) for p in PLATFORMS}
 
@@ -119,7 +76,7 @@ def judge_batch(model, scaler, path: str) -> dict:
 def fine_tune(model, scaler, path: str, epochs: int, lr: float):
     """retrain_trigger 흐름 그대로 : 최근 41행으로 warm start, 시간순 8:2로 나눠 뒤 20%로 게이트 검증."""
     df = pd.read_csv(path)
-    X, y, dates, plats = sequences(df, scaler, last_n_rows=SEQ_LEN + WINDOW)
+    X, y, dates, plats = build_sequences(df, scaler, last_n_rows=SEQ_LEN + WINDOW)
     cut = np.sort(np.unique(dates))[int(WINDOW * TRAIN_RATIO)]
     tr, te = dates < cut, dates >= cut
     old_wape = wape(y[te], predict_qty(model, X[te], scaler))
@@ -139,9 +96,9 @@ def main():
     base = pd.read_csv(os.path.join(DATA_DIR, "sales_base.csv"))
     dates = np.sort(base["Date"].unique())
     split_date = dates[int(len(dates) * TRAIN_RATIO)]
-    scaler = Scaler().fit(base[base["Date"] < split_date])
+    scaler = SalesScaler().fit(base[base["Date"] < split_date])
 
-    X, y, tgt_dates, plats = sequences(base, scaler)
+    X, y, tgt_dates, plats = build_sequences(base, scaler)
     tr, va = tgt_dates < split_date, tgt_dates >= split_date
     y_scaled = scaler.scale("Sales_Qty", y)
     print(f"[데이터] 학습 시퀀스 {tr.sum()}개, 검증 시퀀스 {va.sum()}개, 피처 {X.shape[2]}개 "
@@ -180,7 +137,7 @@ def main():
 
     # 3) 브랜디 : 빠른 배송 피처로 변화를 미리 반영하는지 (피처를 0으로 지운 예측과 비교)
     drift = pd.read_csv(os.path.join(DATA_DIR, "sales_drift_brandi.csv"))
-    Xd, yd, _, pd_ = sequences(drift, scaler, last_n_rows=SEQ_LEN + WINDOW)
+    Xd, yd, _, pd_ = build_sequences(drift, scaler, last_n_rows=SEQ_LEN + WINDOW)
     m = pd_ == "brandi"
     with_flag = predict_qty(model, Xd[m], scaler)
     no_flag_X = Xd[m].copy()
@@ -191,7 +148,7 @@ def main():
 
     # 4) 재학습 효과 : 같은 시나리오의 다음 21일에서 기존 모델 vs 재학습 모델
     nxt = pd.read_csv(os.path.join(DATA_DIR, "sales_drift_brandi_next.csv"))
-    Xn, yn, _, pn = sequences(nxt, scaler, last_n_rows=SEQ_LEN + WINDOW)
+    Xn, yn, _, pn = build_sequences(nxt, scaler, last_n_rows=SEQ_LEN + WINDOW)
     mn = pn == "brandi"
     old_pred = predict_qty(model, Xn[mn], scaler)
     old_short, old_over = stock_impact(yn[mn], old_pred)

@@ -11,7 +11,7 @@ MLflow Model Registry의 Production 버전을 로드하도록 확장합니다.
 main.py / train_and_register.py 코드는 그대로 두고 이 파일만 손대면 되도록
 설계되어 있습니다 - 이것이 "조립 블록" 구조입니다.
 
-스케일러(scaler.pkl)는 Day1~3 내내 동일한 파일을 그대로 재사용합니다
+판매량 스케일러(sales_scaler.pkl)는 baseline 학습 구간에 fit한 파일을 재사용합니다
 (MODEL_SOURCE와 무관하게 항상 로컬 파일에서 로드) - 정규화 기준이 바뀌면
 이미 그 기준으로 학습된 가중치와 어긋나기 때문입니다.
 
@@ -23,40 +23,57 @@ main.py / train_and_register.py 코드는 그대로 두고 이 파일만 손대�
 import os
 import time
 
-from data.features import HAICScaler
+import pandas as pd
 
-LOCAL_MODEL_PATH = "serving_app/models/haic_v1.keras"
-SCALER_PATH = "serving_app/models/scaler.pkl"
-MLFLOW_MODEL_URI = "models:/HAIC_Predictor/Production"
+from data.features import (
+    N_FEATURES, SEQ_LEN, SalesScaler, feature_matrix,
+)
+
+LOCAL_MODEL_PATH = "serving_app/models/sales_v1.keras"
+SCALER_PATH = "serving_app/models/sales_scaler.pkl"
+MLFLOW_MODEL_URI = "models:/Sales_Predictor/Production"
 
 _model_cache = None  # Lazy Loading 캐시
+
+
+def validate_sales_model(keras_model):
+    """학습과 서빙이 같은 20일 x 11피처 모델 입력을 사용하도록 확인한다."""
+    if getattr(keras_model, "input_shape", None) != (None, SEQ_LEN, N_FEATURES):
+        raise ValueError(
+            f"판매량 모델 입력은 (None, {SEQ_LEN}, {N_FEATURES})이어야 합니다."
+        )
 
 
 class LoadedModel:
     """local .keras와 mlflow 두 소스를 동일한 인터페이스로 감싸는 래퍼."""
 
-    def __init__(self, keras_model, scaler: HAICScaler, version: str):
+    def __init__(self, keras_model, scaler: SalesScaler, version: str):
+        validate_sales_model(keras_model)
         self._keras_model = keras_model
         self.scaler = scaler
         self.version = version
 
     def predict_one(self, sequence: list[dict]) -> float:
-        """
-        sequence: [{"close": ..., "volume": ...}, ...] 길이 SEQ_LEN, 오래된 날 -> 최근 날 순서.
-        """
-        import numpy as np
+        """한 플랫폼의 날짜순 판매량 20행으로 다음 날 판매 수량을 예측한다."""
+        frame = pd.DataFrame(sequence)
+        x = feature_matrix(frame, self.scaler)[None, ...]
+        if x.shape != (1, SEQ_LEN, N_FEATURES):
+            raise ValueError(f"예측 입력은 ({SEQ_LEN}, {N_FEATURES})이어야 합니다.")
+        return float(self.predict_batch(x)[0])
 
-        scaled = [self.scaler.transform_point(p["close"], p["volume"]) for p in sequence]
-        x = np.array([scaled], dtype="float32")  # (1, SEQ_LEN, 2)
-        pred_scaled = float(self._keras_model.predict(x, verbose=0)[0][0])
-        return self.scaler.inverse_close(pred_scaled)
+    def predict_batch(self, sequences):
+        """build_sequences의 (배치, 20, 11) 입력을 판매 수량으로 복원한다."""
+        if sequences.ndim != 3 or sequences.shape[1:] != (SEQ_LEN, N_FEATURES):
+            raise ValueError(f"배치 입력은 (배치, {SEQ_LEN}, {N_FEATURES})이어야 합니다.")
+        scaled = self._keras_model.predict(sequences, verbose=0).flatten()
+        return self.scaler.inverse_sales(scaled)
 
 
 def _load_from_local() -> LoadedModel:
     from tensorflow import keras
 
+    scaler = SalesScaler.load(SCALER_PATH)
     keras_model = keras.models.load_model(LOCAL_MODEL_PATH)
-    scaler = HAICScaler.load(SCALER_PATH)
     return LoadedModel(keras_model=keras_model, scaler=scaler, version="v1-local")
 
 
@@ -71,7 +88,19 @@ def _load_from_mlflow() -> LoadedModel:
     # scaler = HAICScaler.load(SCALER_PATH)  # 스케일러는 MLflow가 아니라 항상 로컬 파일에서
     # return LoadedModel(keras_model=keras_model, scaler=scaler, version="production")
     """
-    raise NotImplementedError("_load_from_mlflow를 구현하세요 (실습 2-1)")
+    import mlflow.tensorflow
+    from mlflow.tracking import MlflowClient
+
+    model_uri, stage = MLFLOW_MODEL_URI.rsplit("/", 1)
+    model_name = model_uri.removeprefix("models:/")
+    versions = MlflowClient().get_latest_versions(model_name, stages=[stage])
+    if not versions:
+        raise RuntimeError(f"{model_name}에 {stage} 모델이 없습니다.")
+    version = str(max(versions, key=lambda v: int(v.version)).version)
+    # 조회한 버전을 고정해 실제 로드한 가중치와 응답 버전이 일치하도록 한다.
+    scaler = SalesScaler.load(SCALER_PATH)
+    keras_model = mlflow.tensorflow.load_model(f"{model_uri}/{version}")
+    return LoadedModel(keras_model=keras_model, scaler=scaler, version=version)
 
 
 def _load_model() -> LoadedModel:
@@ -89,6 +118,17 @@ def load_eager() -> LoadedModel:
     global _model_cache
     _model_cache = model
     return model
+
+
+def invalidate_cache() -> None:
+    """재배포(새 Production 승격) 직후 호출한다.
+
+    캐시를 비워두면 다음 /predict 요청이 새 Production 버전을 다시 로드한다 - 서버를
+    재시작하지 않고도 재배포가 반영되는 지점이다(Day3 완료 기준 4번).
+    """
+    global _model_cache
+    _model_cache = None
+    print("[reload] production 모델이 갱신되어 캐시를 비웠습니다. 다음 요청에서 재로드됩니다.")
 
 
 def get_model() -> LoadedModel:

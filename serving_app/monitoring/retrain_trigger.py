@@ -1,27 +1,16 @@
-"""
-Day3: 드리프트 감지 -> fine-tuning 재학습 -> 재배포를 잇는 파이프라인의 핵심 조립 지점.
-
-흐름: 이상 탐지(RMSE>$4) -> 알림 -> 최근 1개월 데이터 수집 ->
-      Production 가중치에서 이어서 fine-tuning(warm start) -> 게이트 재검증 ->
-      Production 재배포 (통과 못하면 기존 버전 유지)
-
-왜 "처음부터 재학습"이 아니라 fine-tuning인가: 최근 1개월(21거래일)만으로 LSTM을
-스크래치로 학습시키기엔 샘플이 너무 적어 불안정합니다. 이미 3년 전체로 학습된
-Production 가중치에서 이어서 짧게(10 epoch) 미세조정하는 쪽이 훨씬 안정적입니다.
-
-데이터는 data/uploads/에 업로드된 파일 중 가장 최근 것을 사용합니다(data/storage.py의
-latest_upload() - Day2 train_and_register()가 쓰는 것과 같은 소스).
-"""
+"""플랫폼별 WAPE 드리프트 감지 후 판매량 최근 41행으로 warm start를 호출한다."""
 import logging
+import os
 
-from serving_app.monitoring.drift_detector import is_drift
+from serving_app.monitoring.drift_detector import WINDOW_SIZE, drift_report
 
 logger = logging.getLogger("aiops")
 
 
 def check_and_trigger(recent_predictions: list[dict]) -> dict:
-    if not is_drift(recent_predictions):
-        return {"status": "ok"}
+    report = drift_report(recent_predictions)
+    if not any(metrics["drift"] for metrics in report.values()):
+        return {"status": "ok", "platforms": report}
 
     logger.warning("[WARN] drift detected - triggering retrain")
 
@@ -45,4 +34,30 @@ def check_and_trigger(recent_predictions: list[dict]) -> dict:
     #     return {"status": "retrain_triggered", "promoted": True, "rmse": result["rmse"]}
     # return {"status": "retrain_triggered", "promoted": False, "rmse": result["rmse"]}
 
-    return {"status": "retrain_triggered"}
+    from data.features import SEQ_LEN
+    from data.storage import load_sales_data, latest_upload
+    from serving_app import model_loader
+
+    try:
+        frame = load_sales_data(latest_upload(), min_rows_per_platform=WINDOW_SIZE + SEQ_LEN)
+        rows = frame.sort_values("Date").groupby("Platform", sort=False).tail(WINDOW_SIZE + SEQ_LEN)
+        # 실제 드리프트가 있을 때만 무거운 학습 의존성을 로드한다.
+        from serving_app.train_and_register import fine_tune
+
+        logger.info("[INFO] retrain triggered (window=last_21_days)")
+        result = fine_tune(rows)
+        if result["promoted"]:
+            # 로컬 baseline 모드는 유지하고 MLflow 서빙 모드에서만 캐시를 교체한다.
+            # load_eager는 로딩이 성공한 뒤 캐시에 대입하므로 실패하면 기존 모델을 보존한다.
+            if os.getenv("MODEL_SOURCE", "local") == "mlflow":
+                model_loader.load_eager()
+                recent_predictions.clear()  # 이전 모델의 오차를 새 모델의 감지에 섞지 않는다.
+            logger.info(
+                f"[OK] new_wape={result['wape']:.1%} - production promoted: Sales_Predictor v{result['version']}"
+            )
+        else:
+            logger.warning(f"[GATE FAILED] new_wape={result['wape']:.1%} - existing model retained")
+        return {"status": "retrain_triggered", "platforms": report, "training": result}
+    except Exception:
+        logger.exception("[ERROR] retrain or serving reload failed - existing serving model retained")
+        raise
