@@ -38,13 +38,12 @@ keras.utils.set_random_seed(SEED)
 
 
 def build_model(n_features: int) -> keras.Model:
-    """GRU 32-16 + Dropout 0.1 구조 (이승민 최우수 모델 후보)."""
+    """GRU 2층(32→16) + 층 사이 Dropout 0.2 구조 (이슈 #1 기준 모델)."""
     model = keras.Sequential([
         keras.layers.Input(shape=(SEQ_LEN, n_features)),
         keras.layers.GRU(32, return_sequences=True),
-        keras.layers.Dropout(0.1),
+        keras.layers.Dropout(0.2),
         keras.layers.GRU(16),
-        keras.layers.Dropout(0.1),
         keras.layers.Dense(16, activation="relu"),
         keras.layers.Dense(1),
     ])
