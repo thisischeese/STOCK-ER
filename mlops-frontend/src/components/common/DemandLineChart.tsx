@@ -66,8 +66,9 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
       indices.push(i);
     }
     const lastIndex = data.length - 1;
+    const minSpacing = Math.max(2, Math.floor(step * 0.65));
     if (!indices.includes(lastIndex)) {
-      if (indices.length > 0 && lastIndex - indices[indices.length - 1] < 2) {
+      if (indices.length > 0 && lastIndex - indices[indices.length - 1] < minSpacing) {
         indices[indices.length - 1] = lastIndex;
       } else {
         indices.push(lastIndex);

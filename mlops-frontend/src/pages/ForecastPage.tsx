@@ -26,7 +26,10 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
     if (timeframe === '14d') {
       return raw.slice(-14);
     }
-    return raw;
+    if (timeframe === '30d') {
+      return raw.slice(-30);
+    }
+    return raw.slice(-60);
   }, [selectedChannel, timeframe]);
 
   const handleRunInference = () => {
