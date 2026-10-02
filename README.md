@@ -1,19 +1,13 @@
-# STOCK-ER : AI기반 사입 쇼핑몰 판매량 관리 B2B서비스
+# AI기반 사입 쇼핑몰 판매량 관리 B2B 서비스 (STOCK-ER)
 
-동대문 사입 상품 20개를 **브랜디·지그재그·에이블리**에 판매하는 쇼핑몰의
-**플랫폼별 다음 날 판매 수량**을 예측하고, 예측 오차가 커지면(드리프트) 자동으로
-재학습·재배포하는 MLOps/AIOps 프로젝트입니다.
+> 동대문 사입 상품 20개를 **브랜디·지그재그·에이블리**에 판매하는 쇼핑몰의 **플랫폼별 다음 날 판매 수량**을 예측하고, 예측 오차가 커지면(드리프트) 자동으로 재학습·재배포하는 MLOps/AIOps 프로젝트입니다.
 
-HAIC 모델 서빙 3일 실습 스켈레톤(Day1 서빙 → Day2 MLOps → Day3 AIOps)을 바탕으로,
-데이터와 모델을 주가 예측에서 판매량 예측으로 바꿨습니다.
+> [기획안](https://github.com/thisischeese/STOCK-ER/blob/d746fee06b615d27870484b7263e8a3895b4a1ed/docs/AIOps_%EC%A1%B0%EB%B3%84%20%EA%B3%BC%EC%A0%9C_8%EB%B0%98_5%EC%A1%B0_%EA%B8%B0%ED%9A%8D%EC%84%9C.pdf)
 
-| 단계 | 내용 |
-|---|---|
-| Day1 서빙 | FastAPI로 모델 서빙, Lazy/Eager 로딩 비교, `/predict`·`/health` |
-| Day2 MLOps | MLflow 학습 기록·Model Registry, 게이트 통과 시 Production 승격, Docker 단일 컨테이너 |
-| Day3 AIOps | 플랫폼별 WAPE로 드리프트 감지 → warm start 재학습 → 자동 재배포 |
 
-![수요 예측 화면](screenshot/01_demand_forecast.png)
+| 수요 예측 화면 |
+|---|
+| ![수요 예측 화면](screenshot/01_demand_forecast.png) |
 
 ---
 
