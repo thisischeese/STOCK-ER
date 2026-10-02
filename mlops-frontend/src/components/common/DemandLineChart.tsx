@@ -76,19 +76,39 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
     return indices;
   }, [data.length]);
 
+  // Seamless continuous mouse tracking without hitbox gaps
+  const handleMouseMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const svg = e.currentTarget.ownerSVGElement;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const scaleX = width / (rect.width || 1);
+    const mouseSvgX = (e.clientX - rect.left) * scaleX;
+
+    const clampedX = Math.max(paddingLeft, Math.min(width - paddingRight, mouseSvgX));
+    const ratio = (clampedX - paddingLeft) / (chartWidth || 1);
+    const approxIndex = Math.round(ratio * (data.length - 1));
+    const closestIndex = Math.max(0, Math.min(data.length - 1, approxIndex));
+
+    setHoverIndex(closestIndex);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIndex(null);
+  };
+
   const activePoint = hoverIndex !== null ? data[hoverIndex] : data[data.length - 1];
   const isHovering = hoverIndex !== null;
 
   return (
     <div className="w-full select-none space-y-3">
-      {/* Top Dedicated Metrics Inspector Bar (Outside SVG Plot to prevent overlaps) */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2 bg-stibee-surface border border-stibee-hairline rounded-[4px] text-xs min-h-[40px]">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-1.5 font-medium text-stibee-ink">
+      {/* Top Dedicated Metrics Inspector Bar (Fixed height prevents any layout shift or shaking) */}
+      <div className="h-10 px-3.5 bg-stibee-surface border border-stibee-hairline rounded-[4px] text-xs flex items-center justify-between overflow-hidden">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 font-medium text-stibee-ink shrink-0">
             <span className="text-stibee-caption font-normal">
-              {isHovering ? '선택 일자:' : '최신 집계일:'}
+              {isHovering ? '선택 일자:' : '최신 집계:'}
             </span>
-            <span className="font-semibold">
+            <span className="font-semibold text-stibee-ink">
               {activePoint.date} ({activePoint.dayOfWeek})
             </span>
             {activePoint.isWeekend && (
@@ -98,20 +118,20 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-1 text-stibee-muted">
+          <div className="flex items-center gap-1 text-stibee-muted shrink-0">
             <span className="inline-block w-2.5 h-[2px] bg-[#202124]" />
-            <span>실제 판매:</span>
+            <span>실제:</span>
             <strong className="text-stibee-ink font-semibold">{activePoint.actual}개</strong>
           </div>
 
-          <div className="flex items-center gap-1 text-stibee-muted">
+          <div className="flex items-center gap-1 text-stibee-muted shrink-0">
             <span className="inline-block w-2.5 h-[2px] border-t-2 border-dashed border-[#ff6464]" />
-            <span>모델 예측:</span>
+            <span>예측:</span>
             <strong className="text-stibee-coral font-semibold">{activePoint.predicted}개</strong>
           </div>
 
-          <div className="text-stibee-caption pl-3 border-l border-stibee-hairline flex items-center gap-1.5">
-            <span>예측 오차:</span>
+          <div className="text-stibee-caption pl-3 border-l border-stibee-hairline flex items-center gap-1.5 shrink-0">
+            <span>오차:</span>
             <span className="font-medium text-stibee-ink">
               {Math.abs(activePoint.actual - activePoint.predicted)}개
             </span>
@@ -121,10 +141,10 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
           </div>
         </div>
 
-        <div className="text-[11px] text-stibee-caption hidden md:block">
+        <div className="text-[11px] text-stibee-caption hidden lg:block shrink-0">
           {isHovering
-            ? '마우스를 이동하여 다른 일자의 예측 정확도를 조회할 수 있습니다'
-            : '차트 위에 마우스를 올리면 일자별 정밀 수치가 표시됩니다'}
+            ? '마우스를 좌우로 이동하면 일자별 지표가 전환됩니다'
+            : '차트 영역에 마우스를 올리면 일자별 정밀 지표를 확인하실 수 있습니다'}
         </div>
       </div>
 
@@ -219,7 +239,7 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
             );
           })}
 
-          {/* X Axis Date Labels (Filtered using smart sampling to prevent horizontal text collision) */}
+          {/* X Axis Date Labels (Smart sampling prevents any text overlap) */}
           {xLabelIndices.map((idx) => {
             const item = data[idx];
             if (!item) return null;
@@ -258,45 +278,48 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
             strokeLinecap="round"
           />
 
-          {/* Interactive Pointer Points and Vertical Hover Guide */}
-          {data.map((point, idx) => {
-            const x = getX(idx);
-            const actualY = getY(point.actual);
-            const predY = getY(point.predicted);
-            const isHovered = hoverIndex === idx;
+          {/* Interactive Pointer Points and Vertical Hover Guide (pointer-events-none prevents event interference) */}
+          {hoverIndex !== null && (
+            <g className="pointer-events-none">
+              <line
+                x1={getX(hoverIndex)}
+                y1={paddingTop}
+                x2={getX(hoverIndex)}
+                y2={height - paddingBottom}
+                stroke="#bcbdc1"
+                strokeWidth="1"
+                strokeDasharray="2 2"
+              />
+              <circle
+                cx={getX(hoverIndex)}
+                cy={getY(data[hoverIndex].actual)}
+                r="4.5"
+                fill="#202124"
+                stroke="#ffffff"
+                strokeWidth="2"
+              />
+              <circle
+                cx={getX(hoverIndex)}
+                cy={getY(data[hoverIndex].predicted)}
+                r="4.5"
+                fill="#ff6464"
+                stroke="#ffffff"
+                strokeWidth="2"
+              />
+            </g>
+          )}
 
-            return (
-              <g key={point.date}>
-                {/* Hit Box Area */}
-                <rect
-                  x={x - 18}
-                  y={paddingTop}
-                  width={36}
-                  height={chartHeight}
-                  fill="transparent"
-                  className="cursor-pointer"
-                  onMouseEnter={() => setHoverIndex(idx)}
-                  onMouseLeave={() => setHoverIndex(null)}
-                />
-
-                {isHovered && (
-                  <>
-                    <line
-                      x1={x}
-                      y1={paddingTop}
-                      x2={x}
-                      y2={height - paddingBottom}
-                      stroke="#bcbdc1"
-                      strokeWidth="1"
-                      strokeDasharray="2 2"
-                    />
-                    <circle cx={x} cy={actualY} r="4.5" fill="#202124" stroke="#ffffff" strokeWidth="2" />
-                    <circle cx={x} cy={predY} r="4.5" fill="#ff6464" stroke="#ffffff" strokeWidth="2" />
-                  </>
-                )}
-              </g>
-            );
-          })}
+          {/* Single Continuous Interactive Transparent Overlay (Captures all mouse events smoothly) */}
+          <rect
+            x={paddingLeft}
+            y={paddingTop}
+            width={chartWidth}
+            height={chartHeight}
+            fill="transparent"
+            className="cursor-crosshair"
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
         </svg>
       </div>
 
