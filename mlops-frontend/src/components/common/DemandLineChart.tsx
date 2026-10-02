@@ -205,6 +205,13 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
           {data.map((item, idx) => {
             if (item.date !== '10.01') return null;
             const x = getX(idx);
+            const badgeWidth = 108;
+            const badgeHeight = 18;
+            // If the badge overflows beyond width - paddingRight, position it on the left of the line
+            const placeOnLeft = x + 4 + badgeWidth > width - paddingRight;
+            const badgeX = placeOnLeft ? x - 4 - badgeWidth : x + 4;
+            const textX = badgeX + 6;
+
             return (
               <g key="drift-marker">
                 <line
@@ -218,17 +225,17 @@ export const DemandLineChart: React.FC<DemandLineChartProps> = ({
                 />
                 {/* Background pill badge for clear contrast without overlap */}
                 <rect
-                  x={x + 4}
+                  x={badgeX}
                   y={paddingTop - 1}
-                  width={106}
-                  height={18}
+                  width={badgeWidth}
+                  height={badgeHeight}
                   rx="3"
                   fill="#ffffff"
                   stroke="#ff6464"
                   strokeWidth="0.8"
                 />
                 <text
-                  x={x + 8}
+                  x={textX}
                   y={paddingTop + 12}
                   fill="#ff6464"
                   fontSize="10"
