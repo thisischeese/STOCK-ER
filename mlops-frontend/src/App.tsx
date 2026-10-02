@@ -7,7 +7,14 @@ import { AIOpsPage } from './pages/AIOpsPage';
 import { ServingPage } from './pages/ServingPage';
 
 export const App: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<NavigationTab>('forecast');
+  const [currentTab, setCurrentTab] = useState<NavigationTab>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as NavigationTab;
+    if (tabParam && ['forecast', 'inventory', 'aiops', 'serving'].includes(tabParam)) {
+      return tabParam;
+    }
+    return 'forecast';
+  });
 
   const renderCurrentPage = () => {
     switch (currentTab) {

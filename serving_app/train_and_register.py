@@ -21,7 +21,7 @@ from data.features import (
 )
 from data.storage import latest_upload, load_sales_data
 from serving_app.lstm_model import build_model
-from serving_app.model_loader import MLFLOW_MODEL_URI, SCALER_PATH, get_model, validate_sales_model
+from serving_app.model_loader import LOCAL_MODEL_PATH, MLFLOW_MODEL_URI, SCALER_PATH, get_model, validate_sales_model
 from serving_app.monitoring.drift_detector import WINDOW_SIZE, WAPE_THRESHOLD, wape
 
 # 기존 운영 학습과 같은 시드 및 학습 설정을 유지한다.
@@ -133,7 +133,10 @@ def fine_tune(rows: list[dict]) -> dict:
     scaler = SalesScaler.load(SCALER_PATH)
     X_train, y_train_scaled, X_test, y_test, platforms = _prepare(frame, scaler, last_n_rows=required)
 
-    reference = mlflow.tensorflow.load_model(f"models:/{MODEL_NAME}/Production")
+    try:
+        reference = mlflow.tensorflow.load_model(f"models:/{MODEL_NAME}/Production")
+    except Exception:
+        reference = keras.models.load_model(LOCAL_MODEL_PATH)
     validate_sales_model(reference)
     old_preds = scaler.inverse_sales(reference.predict(X_test, verbose=0).flatten())
     model = keras.models.clone_model(reference)

@@ -667,7 +667,7 @@ export const mockPipelineSteps: PipelineWorkflowStep[] = [
     name: 'Warm-start 증분 재학습 실행',
     status: 'completed',
     timestamp: '2026-10-01 10:12:22',
-    description: '최근 41일 시계열(변화 전 20일과 변화 후 21일)을 투입하여 GRU 32-16 가중치 미세조정(10 epoch)을 마쳤습니다.',
+    description: '최근 41일 시계열(변화 전 20일과 변화 후 21일)을 투입하여 LSTM (32-32-16) 가중치 미세조정(10 epoch)을 마쳤습니다.',
     metricLabel: '학습 소요시간',
     metricValue: '14.8초 (Loss: MAE)',
   },
@@ -708,7 +708,7 @@ export const mockModelRegistry: ModelRegistryVersion[] = [
   {
     version: 'Version 2 (신규)',
     stage: 'Production',
-    architecture: 'GRU (32-16) + Dropout 0.1',
+    architecture: 'LSTM (32-32-16) + Dropout 0.1',
     valWape: 6.8,
     registeredAt: '2026-10-01 10:12:26',
     promotedBy: 'AIOps Auto-Gate Pipeline',
@@ -718,7 +718,7 @@ export const mockModelRegistry: ModelRegistryVersion[] = [
   {
     version: 'Version 1 (이전)',
     stage: 'Archived',
-    architecture: 'GRU (32-16) + Dropout 0.1',
+    architecture: 'LSTM (32-32-16) + Dropout 0.1',
     valWape: 8.6,
     registeredAt: '2026-09-15 08:30:00',
     promotedBy: '이승민 (초기 모델 배포)',
