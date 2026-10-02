@@ -44,24 +44,7 @@ export const ServingPage: React.FC = () => {
     status: number;
     latencyMs: number;
     data: any;
-  } | null>(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('infer') === '1') {
-      return {
-        status: 200,
-        latencyMs: 34,
-        data: {
-          prediction_quantity: 58,
-          channel: "brandi",
-          is_weekend: false,
-          model_version: "Production-v2",
-          stage: "Production",
-          status: "SUCCESS"
-        }
-      };
-    }
-    return null;
-  });
+  } | null>(null);
 
   const fetchDataStatus = async () => {
     const res = await getDataStatus(8077);
@@ -99,16 +82,6 @@ export const ServingPage: React.FC = () => {
       fileInputRef.current.value = '';
     }
   };
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('scroll') === 'bottom') {
-      window.scrollTo({ top: 520, behavior: 'instant' });
-    }
-    // 마운트 시 초기 헬스체크 및 데이터 상태 조회 실행
-    handleHealthCheck();
-    fetchDataStatus();
-  }, []);
 
   const handleHealthCheck = async () => {
     setIsHealthChecking(true);
@@ -165,72 +138,88 @@ export const ServingPage: React.FC = () => {
 
   const handleRunPlaygroundInference = async () => {
     setIsInferencing(true);
-    const sequence = generatePredictSequence(testChannel, testAvgSales, testIsWeekend, false);
-    const result = await predictSales(sequence, testPort);
+    try {
+      const sequence = generatePredictSequence(testChannel, testAvgSales, testIsWeekend, false);
+      const result = await predictSales(sequence, testPort);
 
-    if (result.ok && result.data) {
-      setInferenceResult({
-        status: 200,
-        latencyMs: result.latencyMs,
-        data: {
-          status: 'success',
-          endpoint: `http://localhost:${testPort}/predict`,
-          platform: result.data.platform,
-          prediction_date: result.data.prediction_date,
-          predicted_sales_qty: result.data.predicted_sales_qty,
-          model_version: result.data.model_version,
-          input_parameters: {
-            past_20d_mean: testAvgSales,
-            is_weekend: testIsWeekend,
-            serving_port: testPort,
+      if (result.ok && result.data) {
+        setInferenceResult({
+          status: 200,
+          latencyMs: result.latencyMs,
+          data: {
+            status: 'success',
+            endpoint: `http://localhost:${testPort}/predict`,
+            platform: result.data.platform,
+            prediction_date: result.data.prediction_date,
+            predicted_sales_qty: result.data.predicted_sales_qty,
+            model_version: result.data.model_version,
+            input_parameters: {
+              past_20d_mean: testAvgSales,
+              is_weekend: testIsWeekend,
+              serving_port: testPort,
+            },
+            execution_metadata: {
+              serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
+              latency_ms: result.latencyMs,
+              timestamp: new Date().toISOString(),
+              source: 'live_fastapi_backend',
+            },
           },
-          execution_metadata: {
-            serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
-            latency_ms: result.latencyMs,
-            timestamp: new Date().toISOString(),
-            source: 'live_fastapi_backend',
-          },
-        },
-      });
-    } else {
-      // 오프라인 fallback: 백엔드가 미기동 상태여도 UI 정상 동작 유지
-      const channelBase: Record<string, number> = {
-        brandi: testIsWeekend ? 72 : 48,
-        zigzag: testIsWeekend ? 44 : 32,
-        ably: testIsWeekend ? 36 : 24,
-      };
+        });
+      } else {
+        // 오프라인 fallback: 백엔드가 미기동 상태여도 UI 정상 동작 유지
+        const channelBase: Record<string, number> = {
+          brandi: testIsWeekend ? 72 : 48,
+          zigzag: testIsWeekend ? 44 : 32,
+          ably: testIsWeekend ? 36 : 24,
+        };
 
-      const baseDemand = channelBase[testChannel] || 35;
-      const calculatedDemand = Math.round(baseDemand * (testAvgSales / 30));
-      const simulatedLatency = testPort === 8077 ? +(34 + Math.random() * 6).toFixed(1) : +(39 + Math.random() * 8).toFixed(1);
+        const baseDemand = channelBase[testChannel] || 35;
+        const calculatedDemand = Math.round(baseDemand * (testAvgSales / 30));
+        const simulatedLatency = testPort === 8077 ? +(34 + Math.random() * 6).toFixed(1) : +(39 + Math.random() * 8).toFixed(1);
 
-      setInferenceResult({
-        status: 200,
-        latencyMs: simulatedLatency,
-        data: {
-          status: 'success (오프라인 시뮬레이션 모드)',
-          endpoint: `http://localhost:${testPort}/predict`,
-          platform: testChannel,
-          prediction_date: '2026-10-01',
-          predicted_sales_qty: calculatedDemand,
-          model_version: 'v1-local (Fallback)',
-          input_parameters: {
-            past_20d_mean: testAvgSales,
-            is_weekend: testIsWeekend,
-            serving_port: testPort,
+        setInferenceResult({
+          status: 200,
+          latencyMs: simulatedLatency,
+          data: {
+            status: 'success (오프라인 시뮬레이션 모드)',
+            endpoint: `http://localhost:${testPort}/predict`,
+            platform: testChannel,
+            prediction_date: '2026-10-01',
+            predicted_sales_qty: calculatedDemand,
+            model_version: 'v1-local (Fallback)',
+            input_parameters: {
+              past_20d_mean: testAvgSales,
+              is_weekend: testIsWeekend,
+              serving_port: testPort,
+            },
+            execution_metadata: {
+              serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
+              latency_ms: simulatedLatency,
+              timestamp: new Date().toISOString(),
+              source: 'offline_fallback',
+              notice: '백엔드 응답 지연으로 안전 폴백 데이터를 표시합니다.',
+            },
           },
-          execution_metadata: {
-            serving_instance: testPort === 8077 ? 'local_fastapi' : 'docker_container',
-            latency_ms: simulatedLatency,
-            timestamp: new Date().toISOString(),
-            source: 'offline_fallback',
-            notice: '백엔드 응답 지연으로 안전 폴백 데이터를 표시합니다.',
-          },
-        },
-      });
+        });
+      }
+    } catch {
+      // 오류 시에도 무한 로딩 방지
+    } finally {
+      setIsInferencing(false);
     }
-    setIsInferencing(false);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('scroll') === 'bottom') {
+      window.scrollTo({ top: 520, behavior: 'instant' });
+    }
+    // 마운트 시 초기 헬스체크, 데이터 상태 조회 및 실시간 단건 예측 추론 실행
+    handleHealthCheck();
+    fetchDataStatus();
+    handleRunPlaygroundInference();
+  }, []);
 
   return (
     <div className="space-y-8">

@@ -406,3 +406,54 @@ export function generateDriftBatchRows(
 
   return rows;
 }
+
+/**
+ * 일상 수요 예측 대시보드(ForecastPage)용 정상 80행 시계열 생성 헬퍼
+ * 80일 시계열을 전송하여 모델로부터 60일치 예측 곡선(80 - 20)을 획득함으로써
+ * 14일, 30일, 60일 조회 시 차트 범위가 명확하게 변경되도록 지원합니다.
+ */
+export function generateNormalBatchRows(
+  platform: 'brandi' | 'zigzag' | 'ably' | 'all' = 'brandi',
+  rowCount: number = 80
+): DailyPoint[] {
+  const rows: DailyPoint[] = [];
+  const baseDate = new Date('2026-07-10');
+  const targetPlatforms: ('brandi' | 'zigzag' | 'ably')[] =
+    platform === 'all' ? ['brandi', 'zigzag', 'ably'] : [platform];
+
+  const config: Record<'brandi' | 'zigzag' | 'ably', { base: number; fast: number; weekendMult: number }> = {
+    brandi: { base: 42, fast: 1, weekendMult: 1.25 },
+    zigzag: { base: 45, fast: 0, weekendMult: 1.0 },
+    ably: { base: 34, fast: 1, weekendMult: 1.1 },
+  };
+
+  for (const p of targetPlatforms) {
+    const cfg = config[p];
+    for (let i = 0; i < rowCount; i++) {
+      const d = new Date(baseDate);
+      d.setDate(baseDate.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+
+      let sales = cfg.base + ((i * 3) % 5) - 2;
+      if (isWeekend) {
+        sales = Math.round(sales * cfg.weekendMult);
+      }
+      const orders = Math.max(5, Math.round(sales * 0.72));
+
+      rows.push({
+        Date: dateStr,
+        Platform: p,
+        Sales_Qty: sales,
+        Orders: Math.min(orders, sales),
+        Fast_Delivery: cfg.fast,
+        Fast_Days: cfg.fast,
+        Active_SKU: 18,
+        Promo: 0,
+      });
+    }
+  }
+
+  return rows;
+}
+

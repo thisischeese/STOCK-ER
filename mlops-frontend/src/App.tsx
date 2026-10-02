@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavigationTab } from './types';
 import { Header } from './components/layout/Header';
 import { ForecastPage } from './pages/ForecastPage';
 import { InventoryPage } from './pages/InventoryPage';
 import { AIOpsPage } from './pages/AIOpsPage';
 import { ServingPage } from './pages/ServingPage';
+import { checkHealth } from './services/api';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavigationTab>(() => {
@@ -15,6 +16,24 @@ export const App: React.FC = () => {
     }
     return 'forecast';
   });
+
+  const [servingHealthy, setServingHealthy] = useState<boolean | undefined>(undefined);
+
+  useEffect(() => {
+    let isMounted = true;
+    const check = async () => {
+      const res = await checkHealth(8077);
+      if (isMounted) {
+        setServingHealthy(res.ok);
+      }
+    };
+    check();
+    const timer = setInterval(check, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   const renderCurrentPage = () => {
     switch (currentTab) {
@@ -34,7 +53,11 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-white flex flex-col font-sans text-stibee-ink selection:bg-stibee-coral/10 selection:text-stibee-coral">
       {/* Global Stibee Header Navigation */}
-      <Header currentTab={currentTab} onTabChange={setCurrentTab} />
+      <Header
+        currentTab={currentTab}
+        onTabChange={setCurrentTab}
+        servingHealthy={servingHealthy}
+      />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8">
