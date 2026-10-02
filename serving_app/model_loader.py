@@ -62,16 +62,14 @@ def _load_from_local() -> LoadedModel:
 
 def _load_from_mlflow() -> LoadedModel:
     """
-    TODO(Day2, 핵심 실습): mlflow.tensorflow.load_model(MLFLOW_MODEL_URI) 로
-    Production 모델을 로드하도록 완성하세요.
-    힌트: train_and_register.py 에서 이미 "HAIC_Predictor" 이름으로 등록·승격까지 해두었습니다.
-
-    # import mlflow.tensorflow
-    # keras_model = mlflow.tensorflow.load_model(MLFLOW_MODEL_URI)
-    # scaler = HAICScaler.load(SCALER_PATH)  # 스케일러는 MLflow가 아니라 항상 로컬 파일에서
-    # return LoadedModel(keras_model=keras_model, scaler=scaler, version="production")
+    Day2: MLflow Model Registry의 Production 버전을 로드한다.
+    train_and_register.py 가 "HAIC_Predictor" 이름으로 등록·승격해 둔 모델이다.
     """
-    raise NotImplementedError("_load_from_mlflow를 구현하세요 (실습 2-1)")
+    import mlflow.tensorflow
+
+    keras_model = mlflow.tensorflow.load_model(MLFLOW_MODEL_URI)
+    scaler = HAICScaler.load(SCALER_PATH)  # 스케일러는 MLflow가 아니라 항상 로컬 파일에서
+    return LoadedModel(keras_model=keras_model, scaler=scaler, version="production")
 
 
 def _load_model() -> LoadedModel:
@@ -89,6 +87,17 @@ def load_eager() -> LoadedModel:
     global _model_cache
     _model_cache = model
     return model
+
+
+def invalidate_cache() -> None:
+    """재배포(새 Production 승격) 직후 호출한다.
+
+    캐시를 비워두면 다음 /predict 요청이 새 Production 버전을 다시 로드한다 - 서버를
+    재시작하지 않고도 재배포가 반영되는 지점이다(Day3 완료 기준 4번).
+    """
+    global _model_cache
+    _model_cache = None
+    print("[reload] production 모델이 갱신되어 캐시를 비웠습니다. 다음 요청에서 재로드됩니다.")
 
 
 def get_model() -> LoadedModel:

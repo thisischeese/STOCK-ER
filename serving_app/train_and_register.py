@@ -59,7 +59,11 @@ def _register_if_gate_passed(model, run_id: str, score: float) -> dict:
     result = {"run_id": run_id, "rmse": score, "promoted": False}
     if score <= RMSE_GATE:
         v = mlflow.register_model(f"runs:/{run_id}/model", MODEL_NAME)
-        MlflowClient().transition_model_version_stage(name=MODEL_NAME, version=v.version, stage="Production")
+        # archive_existing_versions: 이전 Production을 Archived로 내려 Production을 항상 1개로 유지한다.
+        # (여러 버전이 Production에 남으면 models:/HAIC_Predictor/Production 이 어느 버전을 가리키는지
+        #  모호해지고, 롤백 대상도 불분명해진다.)
+        MlflowClient().transition_model_version_stage(
+            name=MODEL_NAME, version=v.version, stage="Production", archive_existing_versions=True)
         result["promoted"] = True
         result["version"] = v.version
         print(f"[GATE PASSED] rmse={score:.2f} -> {MODEL_NAME} v{v.version} promoted to Production")

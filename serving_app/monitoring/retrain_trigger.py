@@ -14,7 +14,8 @@ latest_upload() - Day2 train_and_register()가 쓰는 것과 같은 소스).
 """
 import logging
 
-from serving_app.monitoring.drift_detector import is_drift
+from serving_app import model_loader
+from serving_app.monitoring.drift_detector import WINDOW_SIZE, is_drift
 
 logger = logging.getLogger("aiops")
 
@@ -25,24 +26,19 @@ def check_and_trigger(recent_predictions: list[dict]) -> dict:
 
     logger.warning("[WARN] drift detected - triggering retrain")
 
-    # TODO(Day3, 핵심 실습):
-    #   1) 최근 1개월(21거래일) + 시퀀스 구성용 선행 SEQ_LEN(20)일을 조회하세요.
-    #      -> data/storage.py의 latest_upload()로 업로드된 최신 CSV 경로를 얻고,
-    #         data/features.py의 load_rows(경로)로 원본을 불러와 최근 (21+SEQ_LEN)행만
-    #         슬라이싱하세요.
-    #   2) Day2에서 작성한 serving_app.train_and_register.fine_tune(rows) 를 호출해
-    #      Production 가중치에서 이어서 재학습하세요 (처음부터 다시 학습하지 않습니다).
-    #   3) 반환된 결과(dict)의 "promoted" 값을 확인해 게이트 통과 여부를 판단하세요.
-    #
-    # from data.features import load_rows, SEQ_LEN
-    # from data.storage import latest_upload
-    # from serving_app.train_and_register import fine_tune
-    # logger.info("[INFO] retrain triggered (window=last_21_days)")
-    # rows = load_rows(latest_upload())[-(21 + SEQ_LEN):]
-    # result = fine_tune(rows)
-    # if result["promoted"]:
-    #     logger.info(f"[OK] new_rmse={result['rmse']:.2f} - production promoted: HAIC_Predictor v{result['version']}")
-    #     return {"status": "retrain_triggered", "promoted": True, "rmse": result["rmse"]}
-    # return {"status": "retrain_triggered", "promoted": False, "rmse": result["rmse"]}
+    # 재학습이 필요할 때만 불러온다. 모듈 상단에서 import하면 train_and_register가
+    # tensorflow·mlflow를 서버 시작 시점에 끌어와 Day1 Lazy/Eager 비교가 무의미해진다.
+    from data.features import load_rows, SEQ_LEN
+    from data.storage import latest_upload
+    from serving_app.train_and_register import fine_tune
 
-    return {"status": "retrain_triggered"}
+    logger.info("[INFO] retrain triggered (window=last_21_days)")
+    # 21건을 예측하려면 앞에 SEQ_LEN(20)행이 더 필요하다 (21행만 자르면 시퀀스가 1개뿐)
+    rows = load_rows(latest_upload())[-(WINDOW_SIZE + SEQ_LEN):]
+    # 41행으로 처음부터 학습하면 불안정하므로 Production 가중치에서 이어서 학습(warm start)
+    result = fine_tune(rows)
+    if result["promoted"]:
+        logger.info(f"[OK] new_rmse={result['rmse']:.2f} - production promoted: HAIC_Predictor v{result['version']}")
+        model_loader.invalidate_cache()  # 재배포 반영: 다음 /predict가 새 Production을 로드한다
+        return {"status": "retrain_triggered", "promoted": True, "rmse": result["rmse"]}
+    return {"status": "retrain_triggered", "promoted": False, "rmse": result["rmse"]}
