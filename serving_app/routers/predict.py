@@ -66,6 +66,7 @@ def batch_test(req: BatchTestRequest):
         prices = req.prices
         records: list[dict] = []
         for i in range(len(prices) - SEQ_LEN):
+            # 입력은 i ~ i+SEQ_LEN-1, 정답은 그 다음 칸(i+SEQ_LEN) - 한 칸만 어긋나도 정답이 입력에 섞인다
             window = prices[i : i + SEQ_LEN]
             sequence = [{"close": p, "volume": SIMULATED_VOLUME} for p in window]
             pred = model.predict_one(sequence)

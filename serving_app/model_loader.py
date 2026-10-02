@@ -114,6 +114,17 @@ def load_eager() -> LoadedModel:
     return model
 
 
+def invalidate_cache() -> None:
+    """재배포(새 Production 승격) 직후 호출한다.
+
+    캐시를 비워두면 다음 /predict 요청이 새 Production 버전을 다시 로드한다 - 서버를
+    재시작하지 않고도 재배포가 반영되는 지점이다(Day3 완료 기준 4번).
+    """
+    global _model_cache
+    _model_cache = None
+    print("[reload] production 모델이 갱신되어 캐시를 비웠습니다. 다음 요청에서 재로드됩니다.")
+
+
 def get_model() -> LoadedModel:
     """Lazy Loading: 첫 요청이 들어올 때만 로드하고, 이후에는 캐시를 재사용한다."""
     global _model_cache
