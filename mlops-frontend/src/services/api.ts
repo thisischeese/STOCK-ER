@@ -408,43 +408,50 @@ export function generateDriftBatchRows(
 }
 
 /**
- * 일상 수요 예측 대시보드(ForecastPage)용 정상 45행 시계열 생성 헬퍼
- * 불필요한 드리프트 재학습을 유발하지 않고, Keras 서빙 모델의 예측 곡선 및 실시간 WAPE를 수십 ms 만에 신속하게 수신합니다.
+ * 일상 수요 예측 대시보드(ForecastPage)용 정상 80행 시계열 생성 헬퍼
+ * 80일 시계열을 전송하여 모델로부터 60일치 예측 곡선(80 - 20)을 획득함으로써
+ * 14일, 30일, 60일 조회 시 차트 범위가 명확하게 변경되도록 지원합니다.
  */
 export function generateNormalBatchRows(
-  platform: 'brandi' | 'zigzag' | 'ably' = 'brandi'
+  platform: 'brandi' | 'zigzag' | 'ably' | 'all' = 'brandi',
+  rowCount: number = 80
 ): DailyPoint[] {
   const rows: DailyPoint[] = [];
-  const baseDate = new Date('2026-08-15');
-  const meanMap: Record<string, number> = {
-    brandi: 42,
-    zigzag: 45,
-    ably: 28,
+  const baseDate = new Date('2026-07-10');
+  const targetPlatforms: ('brandi' | 'zigzag' | 'ably')[] =
+    platform === 'all' ? ['brandi', 'zigzag', 'ably'] : [platform];
+
+  const config: Record<'brandi' | 'zigzag' | 'ably', { base: number; fast: number; weekendMult: number }> = {
+    brandi: { base: 42, fast: 1, weekendMult: 1.25 },
+    zigzag: { base: 45, fast: 0, weekendMult: 1.0 },
+    ably: { base: 34, fast: 1, weekendMult: 1.1 },
   };
-  const baseSales = meanMap[platform] || 35;
 
-  for (let i = 0; i < 45; i++) {
-    const d = new Date(baseDate);
-    d.setDate(baseDate.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
-    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+  for (const p of targetPlatforms) {
+    const cfg = config[p];
+    for (let i = 0; i < rowCount; i++) {
+      const d = new Date(baseDate);
+      d.setDate(baseDate.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
 
-    let sales = baseSales + ((i * 3) % 5) - 2;
-    if (isWeekend && platform === 'brandi') {
-      sales = Math.round(sales * 1.25);
+      let sales = cfg.base + ((i * 3) % 5) - 2;
+      if (isWeekend) {
+        sales = Math.round(sales * cfg.weekendMult);
+      }
+      const orders = Math.max(5, Math.round(sales * 0.72));
+
+      rows.push({
+        Date: dateStr,
+        Platform: p,
+        Sales_Qty: sales,
+        Orders: Math.min(orders, sales),
+        Fast_Delivery: cfg.fast,
+        Fast_Days: cfg.fast,
+        Active_SKU: 18,
+        Promo: 0,
+      });
     }
-    const orders = Math.max(5, Math.round(sales * 0.72));
-
-    rows.push({
-      Date: dateStr,
-      Platform: platform,
-      Sales_Qty: sales,
-      Orders: Math.min(orders, sales),
-      Fast_Delivery: platform === 'brandi' ? 1 : 0,
-      Fast_Days: platform === 'brandi' ? 1 : 0,
-      Active_SKU: 18,
-      Promo: 0,
-    });
   }
 
   return rows;

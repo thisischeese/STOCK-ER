@@ -64,11 +64,11 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
     setInferenceSuccess(false);
 
     try {
-      const platform = selectedChannel === 'all' ? 'brandi' : selectedChannel;
-      const batchRows = generateNormalBatchRows(platform);
-      const seq = generatePredictSequence(platform, 42, false, false);
+      const targetPlatform = selectedChannel === 'all' ? 'brandi' : selectedChannel;
+      const batchRows = generateNormalBatchRows(selectedChannel, 80);
+      const seq = generatePredictSequence(targetPlatform, 42, false, false);
 
-      // 단건 추론과 정상 시계열 배치 평가를 병렬 호출하여 실제 Keras 서빙 모델 결과 수신
+      // 단건 추론과 80일 정상 시계열 배치 평가(60일치 예측 생성)를 병렬 호출
       const [predictRes, batchRes] = await Promise.all([
         predictSales(seq, 8077),
         runBatchTest(batchRows, 8077),
@@ -80,25 +80,72 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
 
         if (batchRes.ok && batchRes.data && batchRes.data.predictions.length > 0) {
           const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
-          const transformedPoints: DailySalesDataPoint[] = batchRes.data.predictions.map((p) => {
-            const d = new Date(p.date);
-            const month = (d.getMonth() + 1).toString().padStart(2, '0');
-            const day = d.getDate().toString().padStart(2, '0');
-            return {
-              date: `${month}.${day}`,
-              dayOfWeek: dayNames[d.getDay()],
-              isWeekend: d.getDay() === 0 || d.getDay() === 6,
-              actual: p.actual_sales_qty,
-              predicted: Math.round(p.predicted_sales_qty),
+
+          let transformedPoints: DailySalesDataPoint[] = [];
+
+          if (selectedChannel === 'all') {
+            // all 탭: 날짜별로 3개 플랫폼의 actual과 predicted를 합산하여 60개 통합 포인트 생성
+            const dateMap = new Map<string, { actual: number; predicted: number; dateStr: string; dayOfWeek: string; isWeekend: boolean }>();
+            batchRes.data.predictions.forEach((p) => {
+              const d = new Date(p.date);
+              const month = (d.getMonth() + 1).toString().padStart(2, '0');
+              const day = d.getDate().toString().padStart(2, '0');
+              const dateKey = `${month}.${day}`;
+              const prev = dateMap.get(dateKey) || {
+                actual: 0,
+                predicted: 0,
+                dateStr: dateKey,
+                dayOfWeek: dayNames[d.getDay()],
+                isWeekend: d.getDay() === 0 || d.getDay() === 6,
+              };
+              prev.actual += p.actual_sales_qty;
+              prev.predicted += Math.round(p.predicted_sales_qty);
+              dateMap.set(dateKey, prev);
+            });
+
+            transformedPoints = Array.from(dateMap.values()).map((item) => ({
+              date: item.dateStr,
+              dayOfWeek: item.dayOfWeek,
+              isWeekend: item.isWeekend,
+              actual: item.actual,
+              predicted: item.predicted,
               driftOccurred: false,
-            };
-          });
+            }));
+          } else {
+            // 단일 채널 탭: 해당 채널의 60개 일별 포인트 직접 매핑
+            const filtered = batchRes.data.predictions.filter((p) => p.platform === selectedChannel);
+            const sourceList = filtered.length > 0 ? filtered : batchRes.data.predictions;
+            transformedPoints = sourceList.map((p) => {
+              const d = new Date(p.date);
+              const month = (d.getMonth() + 1).toString().padStart(2, '0');
+              const day = d.getDate().toString().padStart(2, '0');
+              return {
+                date: `${month}.${day}`,
+                dayOfWeek: dayNames[d.getDay()],
+                isWeekend: d.getDay() === 0 || d.getDay() === 6,
+                actual: p.actual_sales_qty,
+                predicted: Math.round(p.predicted_sales_qty),
+                driftOccurred: false,
+              };
+            });
+          }
+
           setLiveChartData(transformedPoints);
 
-          const platMetric = batchRes.data.drift_check.platforms?.[platform];
+          const platMetric = selectedChannel !== 'all'
+            ? batchRes.data.drift_check.platforms?.[selectedChannel]
+            : undefined;
+
           if (platMetric) {
             setLiveWape(formatWape(platMetric.wape));
             setLiveHasDrift(platMetric.drift);
+          } else if (selectedChannel === 'all' && batchRes.data.drift_check.platforms) {
+            // all 탭일 때는 플랫폼들의 평균 WAPE와 드리프트 여부 반영
+            const vals = Object.values(batchRes.data.drift_check.platforms);
+            const avgWape = vals.reduce((acc, v) => acc + v.wape, 0) / (vals.length || 1);
+            const anyDrift = vals.some((v) => v.drift);
+            setLiveWape(formatWape(avgWape));
+            setLiveHasDrift(anyDrift);
           }
 
           if (batchRes.data.drift_check.platforms) {
@@ -118,7 +165,7 @@ export const ForecastPage: React.FC<ForecastPageProps> = ({ onNavigateTab }) => 
         }
 
         setInferenceFeedback({
-          message: `FastAPI 서빙 모델(8077)로부터 ${platform} 채널 실시간 추론 시계열을 동기화했습니다. (내일 예측: ${predictRes.data.predicted_sales_qty}개, 버전: ${predictRes.data.model_version})`,
+          message: `FastAPI 서빙 모델(8077)로부터 ${targetPlatform} 채널 실시간 추론 시계열을 동기화했습니다. (내일 예측: ${predictRes.data.predicted_sales_qty}개, 버전: ${predictRes.data.model_version})`,
           latencyText: `지연시간: ${predictRes.latencyMs}ms`,
         });
         setInferenceSuccess(true);
