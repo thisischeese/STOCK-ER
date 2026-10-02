@@ -13,8 +13,9 @@ Production 가중치에서 이어서 짧게(10 epoch) 미세조정하는 쪽이 
 latest_upload() - Day2 train_and_register()가 쓰는 것과 같은 소스).
 """
 import logging
+import os
 
-from serving_app.monitoring.drift_detector import is_drift
+from serving_app.monitoring.drift_detector import WINDOW_SIZE, is_drift
 
 logger = logging.getLogger("aiops")
 
@@ -45,4 +46,31 @@ def check_and_trigger(recent_predictions: list[dict]) -> dict:
     #     return {"status": "retrain_triggered", "promoted": True, "rmse": result["rmse"]}
     # return {"status": "retrain_triggered", "promoted": False, "rmse": result["rmse"]}
 
-    return {"status": "retrain_triggered"}
+    from data.features import load_rows, SEQ_LEN
+    from data.storage import latest_upload
+    from serving_app import model_loader
+
+    try:
+        rows = load_rows(latest_upload())[-(WINDOW_SIZE + SEQ_LEN):]
+        if len(rows) < WINDOW_SIZE + SEQ_LEN:
+            raise ValueError(f"재학습에는 최소 {WINDOW_SIZE + SEQ_LEN}행이 필요합니다.")
+        # 실제 드리프트가 있을 때만 무거운 학습 의존성을 로드한다.
+        from serving_app.train_and_register import fine_tune
+
+        logger.info("[INFO] retrain triggered (window=last_21_days)")
+        result = fine_tune(rows)
+        if result["promoted"]:
+            # 로컬 baseline 모드는 유지하고 MLflow 서빙 모드에서만 캐시를 교체한다.
+            # load_eager는 로딩이 성공한 뒤 캐시에 대입하므로 실패하면 기존 모델을 보존한다.
+            if os.getenv("MODEL_SOURCE", "local") == "mlflow":
+                model_loader.load_eager()
+                recent_predictions.clear()  # 이전 모델의 오차를 새 모델의 감지에 섞지 않는다.
+            logger.info(
+                f"[OK] new_rmse={result['rmse']:.2f} - production promoted: HAIC_Predictor v{result['version']}"
+            )
+        else:
+            logger.warning(f"[GATE FAILED] new_rmse={result['rmse']:.2f} - existing model retained")
+        return {"status": "retrain_triggered", "promoted": result["promoted"], "rmse": result["rmse"]}
+    except Exception:
+        logger.exception("[ERROR] retrain or serving reload failed - existing serving model retained")
+        raise

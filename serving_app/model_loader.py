@@ -71,7 +71,19 @@ def _load_from_mlflow() -> LoadedModel:
     # scaler = HAICScaler.load(SCALER_PATH)  # 스케일러는 MLflow가 아니라 항상 로컬 파일에서
     # return LoadedModel(keras_model=keras_model, scaler=scaler, version="production")
     """
-    raise NotImplementedError("_load_from_mlflow를 구현하세요 (실습 2-1)")
+    import mlflow.tensorflow
+    from mlflow.tracking import MlflowClient
+
+    model_uri, stage = MLFLOW_MODEL_URI.rsplit("/", 1)
+    model_name = model_uri.removeprefix("models:/")
+    versions = MlflowClient().get_latest_versions(model_name, stages=[stage])
+    if not versions:
+        raise RuntimeError(f"{model_name}에 {stage} 모델이 없습니다.")
+    version = str(max(versions, key=lambda v: int(v.version)).version)
+    # 조회한 버전을 고정해 실제 로드한 가중치와 응답 버전이 일치하도록 한다.
+    keras_model = mlflow.tensorflow.load_model(f"{model_uri}/{version}")
+    scaler = HAICScaler.load(SCALER_PATH)
+    return LoadedModel(keras_model=keras_model, scaler=scaler, version=version)
 
 
 def _load_model() -> LoadedModel:
