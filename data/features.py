@@ -1,110 +1,126 @@
-"""
-HAIC 데이터를 LSTM 입력용 시퀀스로 변환하는 공용 유틸리티.
+"""판매량 학습과 서빙에서 공유할 20일 x 11피처 전처리.
 
-Day1 baseline 학습(scripts/train_baseline_v1.py), Day2 MLflow 학습
-(serving_app/train_and_register.py), Day3 fine-tuning 재학습
-(monitoring/retrain_trigger.py)이 모두 이 모듈을 재사용합니다. 시퀀스 정의를
-한 곳에서만 관리해야 "서빙 시점 입력"과 "학습 시점 입력"이 어긋나는 실무 사고를
-방지할 수 있습니다.
-
-입력 시퀀스: 최근 SEQ_LEN(20)거래일의 (close, volume)
-타깃: 그다음 거래일의 close
+CSV 컬럼은 Date, Platform, Sales_Qty, Orders, Fast_Delivery, Fast_Days,
+Active_SKU, Promo이다. FEATURE_NAMES와 PLATFORMS의 순서가 모델 입력 순서다.
+SalesScaler는 baseline 학습 구간으로만 fit하고 검증, 재학습, 서빙에서 재사용한다.
+이 모듈은 TensorFlow나 모델 학습에 의존하지 않는다.
 """
-import csv
+import math
 import pickle
 
-SEQ_LEN = 20  # LSTM 입력 윈도우 길이 (거래일 수) - 약 1개월치 거래일
+import numpy as np
+import pandas as pd
 
 
-def load_rows(csv_path: str = "data/haic_prices.csv") -> list[dict]:
-    with open(csv_path, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = [
-            {
-                "Date": r["Date"],
-                "Close": float(r["Close"]),
-                "Volume": float(r["Volume"]),
-            }
-            for r in reader
-        ]
-    return rows
+SEQ_LEN = 20
+PLATFORMS = ["brandi", "zigzag", "ably"]
+FEATURE_NAMES = (
+    "sales_qty", "orders", "fast_delivery", "fast_days",
+    "weekday_sin", "weekday_cos", "active_sku", "promo",
+    "platform_brandi", "platform_zigzag", "platform_ably",
+)
+N_FEATURES = len(FEATURE_NAMES)
 
 
-class HAICScaler:
-    """
-    close/volume을 각각 [0, 1] 범위로 정규화하는 min-max 스케일러.
+class SalesScaler:
+    """log1p 판매 수량과 주문 건수를 [0, 1]로 정규화. 학습 구간에서 한 번만 fit하고 재학습 때도 유지한다.
 
-    LSTM은 스케일에 민감하기 때문에(트리 기반 모델과 달리) 반드시 정규화가 필요합니다.
-    Day1에서 base 데이터로 한 번 fit한 뒤 serving_app/models/scaler.pkl로 저장해두고,
-    Day2 MLflow 학습과 Day3 fine-tuning 모두 같은 스케일러를 재사용합니다.
-    (fine-tuning 시 스케일러를 다시 fit하지 않는 이유: 이미 이 스케일로 학습된 모델
-     가중치와 어긋나면 fine-tuning 자체가 무의미해지기 때문입니다.)
+    fit에는 baseline 학습 구간만 전달한다. feature_matrix/build_sequences는
+    fit을 호출하지 않는다. 학습한 인스턴스는 pickle로 직렬화해 재사용할 수 있다.
     """
 
-    def __init__(self):
-        self.close_min = self.close_max = None
-        self.volume_min = self.volume_max = None
-
-    def fit(self, rows: list[dict]) -> "HAICScaler":
-        closes = [r["Close"] for r in rows]
-        volumes = [r["Volume"] for r in rows]
-        self.close_min, self.close_max = min(closes), max(closes)
-        self.volume_min, self.volume_max = min(volumes), max(volumes)
+    def fit(self, df: pd.DataFrame) -> "SalesScaler":
+        self.lo = {c: math.log1p(df[c].min()) for c in ("Sales_Qty", "Orders")}
+        self.hi = {c: math.log1p(df[c].max()) for c in ("Sales_Qty", "Orders")}
         return self
 
-    def _scale(self, value: float, lo: float, hi: float) -> float:
-        if hi == lo:
-            return 0.0
-        return (value - lo) / (hi - lo)
+    def scale(self, col: str, v):
+        return (np.log1p(v) - self.lo[col]) / (self.hi[col] - self.lo[col])
 
-    def _unscale(self, value: float, lo: float, hi: float) -> float:
-        return value * (hi - lo) + lo
+    def inverse_sales(self, s):
+        return np.expm1(s * (self.hi["Sales_Qty"] - self.lo["Sales_Qty"]) + self.lo["Sales_Qty"])
 
-    def transform_point(self, close: float, volume: float) -> list[float]:
-        return [
-            self._scale(close, self.close_min, self.close_max),
-            self._scale(volume, self.volume_min, self.volume_max),
-        ]
-
-    def scale_close(self, close: float) -> float:
-        """타깃(다음날 종가)을 학습용으로 정규화. 입력 시퀀스와 같은 스케일을 써야
-        손실(loss)이 과도하게 커지지 않고 학습이 안정적으로 수렴한다."""
-        return self._scale(close, self.close_min, self.close_max)
-
-    def inverse_close(self, scaled_close: float) -> float:
-        """모델이 뱉은 정규화된 예측값을 실제 달러 단위 종가로 되돌린다."""
-        return self._unscale(scaled_close, self.close_min, self.close_max)
-
-    def save(self, path: str = "serving_app/models/scaler.pkl"):
-        with open(path, "wb") as f:
-            pickle.dump(self.__dict__, f)
+    def save(self, path):
+        """baseline 학습 구간으로 fit한 범위와 11피처 계약을 지정한 경로에 저장한다."""
+        if not hasattr(self, "lo") or not hasattr(self, "hi"):
+            raise ValueError("baseline 학습 구간으로 fit한 SalesScaler만 저장할 수 있습니다.")
+        payload = {
+            "format_version": 1,
+            "seq_len": SEQ_LEN,
+            "feature_names": FEATURE_NAMES,
+            "platforms": tuple(PLATFORMS),
+            "lo": self.lo,
+            "hi": self.hi,
+        }
+        with open(path, "wb") as file:
+            pickle.dump(payload, file)
 
     @classmethod
-    def load(cls, path: str = "serving_app/models/scaler.pkl") -> "HAICScaler":
+    def load(cls, path) -> "SalesScaler":
+        """11피처 메타데이터가 일치하는 scaler만 읽고 주가용 산출물은 거부한다."""
+        with open(path, "rb") as file:
+            payload = pickle.load(file)
+        columns = {"Sales_Qty", "Orders"}
+        if (
+            not isinstance(payload, dict)
+            or payload.get("format_version") != 1
+            or payload.get("seq_len") != SEQ_LEN
+            or payload.get("feature_names") != FEATURE_NAMES
+            or payload.get("platforms") != tuple(PLATFORMS)
+            or not isinstance(payload.get("lo"), dict)
+            or not isinstance(payload.get("hi"), dict)
+            or set(payload["lo"]) != columns
+            or set(payload["hi"]) != columns
+        ):
+            raise ValueError(
+                "판매량 20일, 11피처 scaler와 호환되지 않는 파일입니다. "
+                "기존 주가용 2피처 scaler를 재사용할 수 없으므로 판매량 baseline scaler가 필요합니다."
+            )
         scaler = cls()
-        with open(path, "rb") as f:
-            scaler.__dict__.update(pickle.load(f))
+        scaler.lo = payload["lo"]
+        scaler.hi = payload["hi"]
         return scaler
 
 
-def build_sequences(rows: list[dict], scaler: HAICScaler, seq_len: int = SEQ_LEN):
+def feature_matrix(df: pd.DataFrame, scaler: SalesScaler) -> np.ndarray:
+    """행 순서를 유지해 (행 수, 11) float32 피처를 만든다.
+
+    서빙에서는 한 플랫폼의 날짜순 20행을 전달해 (20, 11) 입력을 만든다.
+    날짜 정렬과 플랫폼별 학습 시퀀스 구성은 build_sequences가 담당한다.
     """
-    rows(시간순 OHLCV)에서 (SEQ_LEN, 2) 크기의 정규화된 입력 시퀀스와
-    다음날 종가(정규화 전 실값) 타깃을 만든다.
+    dow = pd.to_datetime(df["Date"]).dt.dayofweek.to_numpy()
+    onehot = np.stack([(df["Platform"] == p).to_numpy(dtype=float) for p in PLATFORMS], axis=1)
+    return np.column_stack([
+        scaler.scale("Sales_Qty", df["Sales_Qty"].to_numpy()),
+        scaler.scale("Orders", df["Orders"].to_numpy()),
+        df["Fast_Delivery"].to_numpy(dtype=float),
+        np.minimum(df["Fast_Days"].to_numpy(), 28) / 28,
+        np.sin(2 * np.pi * dow / 7),
+        np.cos(2 * np.pi * dow / 7),
+        df["Active_SKU"].to_numpy() / 20,
+        df["Promo"].to_numpy(dtype=float),
+        onehot,
+    ]).astype("float32")
 
-    반환: X (n_samples, seq_len, 2), y (n_samples,) - y는 스케일 안 된 실제 종가
+
+def build_sequences(df: pd.DataFrame, scaler: SalesScaler, last_n_rows: int | None = None):
+    """플랫폼별로 (20일 피처 → 다음 날 판매) 시퀀스를 만든다. 반환 : X, y(실제 수량), 타깃 날짜, 플랫폼.
+
+    PLATFORMS 순서로 묶고 각 플랫폼 안에서는 날짜순으로 정렬한다.
+    last_n_rows는 플랫폼마다 적용한다. 네 반환 배열의 같은 인덱스는
+    같은 예측을 가리킨다. X의 각 시퀀스 뒤 날짜의 판매 수량이 y다.
     """
-    scaled_points = [scaler.transform_point(r["Close"], r["Volume"]) for r in rows]
-    closes = [r["Close"] for r in rows]
-
-    X, y = [], []
-    for i in range(len(rows) - seq_len):
-        X.append(scaled_points[i : i + seq_len])
-        y.append(closes[i + seq_len])
-    return X, y
-
-
-def train_test_split(X: list, y: list, test_ratio: float = 0.2):
-    """시간 순서를 유지한 채 앞부분을 train, 뒷부분을 test로 나눈다 (미래 데이터 누수 방지)."""
-    split_idx = int(len(X) * (1 - test_ratio))
-    return X[:split_idx], y[:split_idx], X[split_idx:], y[split_idx:]
+    X, y, dates, plats = [], [], [], []
+    for p in PLATFORMS:
+        part = df[df["Platform"] == p].sort_values("Date")
+        if last_n_rows:
+            part = part.tail(last_n_rows)
+        feats = feature_matrix(part, scaler)
+        sales = part["Sales_Qty"].to_numpy()
+        d = part["Date"].to_numpy()
+        for i in range(len(part) - SEQ_LEN):
+            X.append(feats[i : i + SEQ_LEN])
+            y.append(sales[i + SEQ_LEN])
+            dates.append(d[i + SEQ_LEN])
+            plats.append(p)
+    return np.array(X), np.array(y, dtype=float), np.array(dates), np.array(plats)

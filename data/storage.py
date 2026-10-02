@@ -1,24 +1,24 @@
-"""
-업로드된 HAIC 데이터 파일 관리.
-
-data/generate_haic_data.py로 자동 생성하던 방식 대신, 대시보드에서 CSV 파일을
-직접 업로드하는 방식으로 바뀌었습니다 (serving_app/routers/data.py 참고).
-업로드된 파일은 이 디렉터리(data/uploads/)에 타임스탬프가 붙은 이름으로 계속
-쌓이고(과거 파일을 덮어쓰지 않습니다), 학습(train_and_register.py 등)은 항상
-가장 최근에 올라온 파일 하나를 사용합니다.
-"""
+"""판매량 CSV 읽기와 최신 업로드 파일 조회."""
 import glob
 import os
+
+import pandas as pd
+
+from serving_app.schemas import SALES_ROWS, validate_sales_rows
 
 UPLOAD_DIR = "data/uploads"
 
 
-def latest_upload(upload_dir: str = UPLOAD_DIR) -> str:
-    """data/uploads/ 에 쌓인 CSV 중 가장 최근에 업로드된 파일의 경로를 반환한다."""
-    files = sorted(glob.glob(os.path.join(upload_dir, "*.csv")), key=os.path.getmtime)
+def load_sales_data(path_or_buffer, min_rows_per_platform: int = 41) -> pd.DataFrame:
+    frame = pd.read_csv(path_or_buffer, encoding="utf-8-sig")
+    rows = SALES_ROWS.validate_python(frame.to_dict("records"))
+    validate_sales_rows(rows, min_rows_per_platform)
+    return pd.DataFrame([row.model_dump(mode="json") for row in rows])
+
+
+def latest_upload(upload_dir: str | None = None) -> str:
+    """업로드된 CSV 중 가장 최근 파일을 반환한다."""
+    files = glob.glob(os.path.join(upload_dir or UPLOAD_DIR, "*.csv"))
     if not files:
-        raise FileNotFoundError(
-            "업로드된 HAIC 데이터가 없습니다. 대시보드에서 CSV 파일을 먼저 업로드하세요 "
-            f"(data/sample_haic_prices.csv를 예시로 업로드해볼 수 있습니다 -> {upload_dir}/)."
-        )
-    return files[-1]
+        raise FileNotFoundError("업로드된 판매량 CSV가 없습니다.")
+    return max(files, key=os.path.getmtime)
