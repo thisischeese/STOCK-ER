@@ -407,22 +407,36 @@ export const ServingPage: React.FC = () => {
 
         {dataStatus?.exists ? (
           <div className="space-y-3 pt-1">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-stibee-surface p-3 rounded-[4px] border border-stibee-hairline">
-              <div>
-                <span className="text-stibee-caption block text-[11px]">업로드 파일명</span>
-                <span className="font-mono font-medium text-stibee-ink">{dataStatus.filename}</span>
+            <div className="bg-stibee-surface p-3.5 rounded-[4px] border border-stibee-hairline space-y-3 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-2.5 border-b border-stibee-hairline/80 gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-stibee-caption text-[11px] shrink-0 font-medium">업로드 파일명</span>
+                  <span
+                    className="font-mono font-medium text-stibee-ink truncate break-all bg-white px-2 py-0.5 rounded border border-stibee-hairline/80"
+                    title={dataStatus.filename}
+                  >
+                    {dataStatus.filename}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0 text-stibee-caption text-[11px]">
+                  <span>기준 일자 (UTC):</span>
+                  <span className="font-mono text-stibee-ink font-medium">{dataStatus.as_of_date}</span>
+                </div>
               </div>
-              <div>
-                <span className="text-stibee-caption block text-[11px]">총 데이터 건수</span>
-                <span className="font-medium text-stibee-ink">{dataStatus.rows?.toLocaleString()}행</span>
-              </div>
-              <div>
-                <span className="text-stibee-caption block text-[11px]">데이터 수집 기간</span>
-                <span className="font-mono text-stibee-ink">{dataStatus.start_date} ~ {dataStatus.end_date}</span>
-              </div>
-              <div>
-                <span className="text-stibee-caption block text-[11px]">기준 일자 (UTC)</span>
-                <span className="font-mono text-stibee-ink">{dataStatus.as_of_date}</span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-0.5">
+                <div className="min-w-0">
+                  <span className="text-stibee-caption block text-[11px]">총 데이터 건수</span>
+                  <span className="font-medium text-stibee-ink text-sm">
+                    {dataStatus.rows?.toLocaleString()}행
+                  </span>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-stibee-caption block text-[11px]">데이터 수집 기간</span>
+                  <span className="font-mono text-stibee-ink text-sm">
+                    {dataStatus.start_date} ~ {dataStatus.end_date}
+                  </span>
+                </div>
               </div>
             </div>
 
